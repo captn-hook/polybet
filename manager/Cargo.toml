@@ -1,0 +1,9 @@
+[workspace]
+members = [
+  "crates/polybet-db",
+  "crates/polybet-events",
+  "services/input",
+  "services/resolution",
+  "services/observe",
+]
+resolver = "2"

@@ -1,0 +1,41 @@
+version: v1
+
+experiment:
+  id: exp-control-pass-through
+  name: control-pass-through
+  mode: paper
+  tags: [control, pass-through]
+
+model:
+  family: control_baseline
+  task: binary_yes_no
+  params: {}
+
+data:
+  signal_topics: [signal.computed.v1]
+  lookback_minutes: 60
+  label_horizon_minutes: 5
+  train_window_days: 0
+  validation_window_days: 0
+
+features:
+  text_embedding:
+    enabled: false
+    provider: ollama
+    model: nomic-embed-text
+  numeric: []
+
+inference:
+  min_confidence: 0.5
+  max_positions: 1
+  cooldown_seconds: 30
+
+outputs:
+  prediction_topic: prediction.proposed.v1
+  include_feature_snapshot: false
+
+random_baseline:
+  strategy_mode: pass_through
+  yes_probability: 0.5
+  horizon_minutes: 5
+  loop_interval_seconds: 5

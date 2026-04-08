@@ -1,0 +1,42 @@
+version: v1
+
+experiment:
+  id: exp-follow-signal-sentiment
+  name: follow-signal-sentiment
+  mode: paper
+  tags: [signal, polymarket, sentiment, follow]
+
+model:
+  family: control_baseline
+  task: binary_yes_no
+  params: {}
+
+data:
+  signal_topics: [signals.normalized.v1]
+  lookback_minutes: 60
+  label_horizon_minutes: 5
+  train_window_days: 0
+  validation_window_days: 0
+
+features:
+  text_embedding:
+    enabled: false
+    provider: ollama
+    model: nomic-embed-text
+  numeric: []
+
+inference:
+  min_confidence: 0.5
+  max_positions: 1
+  cooldown_seconds: 30
+
+outputs:
+  prediction_topic: predictions.proposed.v1
+  include_feature_snapshot: false
+
+random_baseline:
+  strategy_mode: follow_signal_sentiment
+  yes_probability: 0.5
+  max_minutes_to_end: 120
+  horizon_minutes: 5
+  loop_interval_seconds: 30

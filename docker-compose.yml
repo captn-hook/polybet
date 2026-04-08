@@ -1,0 +1,264 @@
+name: polybet
+
+x-worker-common: &worker-common
+  restart: unless-stopped
+  depends_on:
+    observe:
+      condition: service_started
+    nats:
+      condition: service_healthy
+  environment: &worker-env
+    APP_ENV: ${APP_ENV:-dev}
+    MANAGER_BASE_URL: http://observe:8080
+    NATS_URL: nats://nats:4222
+    OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    VECTOR_BACKEND: pgvector
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks:
+    - polybet_net
+
+x-signal-base: &signal-base
+  <<: *worker-common
+  image: ${SIGNAL_IMAGE:-polybet-signal:local}
+  build:
+    context: .
+    dockerfile: .\signal\Dockerfile
+  environment:
+    <<: *worker-env
+    SIGNAL_KIND: ${SIGNAL_KIND:-polymarket_sentiment}
+    SIGNAL_ID: ${SIGNAL_ID:-signal-poly-sentiment}
+    SIGNAL_POLL_INTERVAL_SEC: ${SIGNAL_POLL_INTERVAL_SEC:-15}
+    SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-polybet}
+      POSTGRES_USER: ${POSTGRES_USER:-polybet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-polybet_dev_password}
+      INPUT_DB_USER: ${INPUT_DB_USER:-polybet_input}
+      INPUT_DB_PASSWORD: ${INPUT_DB_PASSWORD:-polybet_input_dev_password}
+      RESOLUTION_DB_USER: ${RESOLUTION_DB_USER:-polybet_resolution}
+      RESOLUTION_DB_PASSWORD: ${RESOLUTION_DB_PASSWORD:-polybet_resolution_dev_password}
+      OBSERVE_DB_USER: ${OBSERVE_DB_USER:-polybet_observe}
+      OBSERVE_DB_PASSWORD: ${OBSERVE_DB_PASSWORD:-polybet_observe_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ${POSTGRES_DATA_PATH:-.\data\postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-polybet} -d ${POSTGRES_DB:-polybet}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - polybet_net
+
+  postgres_backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-polybet_dev_password}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-polybet}
+      POSTGRES_USER: ${POSTGRES_USER:-polybet}
+      BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-3600}
+      BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ${POSTGRES_BACKUP_PATH:-.\data\backups\postgres}:/backups
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /backups
+        while true; do
+          until pg_isready -h "$${POSTGRES_HOST}" -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" >/dev/null 2>&1; do
+            sleep 2
+          done
+          TS=$$(date -u +%Y%m%dT%H%M%SZ)
+          FILE="/backups/$${POSTGRES_DB}_$${TS}.sql.gz"
+          TMP="$${FILE}.tmp"
+          pg_dump -h "$${POSTGRES_HOST}" -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" | gzip > "$${TMP}"
+          mv "$${TMP}" "$${FILE}"
+          find /backups -type f -name "*.sql.gz" -mtime +"$${BACKUP_RETENTION_DAYS}" -delete
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+        done
+    networks:
+      - polybet_net
+
+  nats:
+    image: nats:2.11-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - polybet_net
+
+  input:
+    image: ${MANAGER_INPUT_IMAGE:-polybet-manager-input:local}
+    build:
+      context: .\manager
+      dockerfile: Dockerfile.input
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    ports:
+      - "${INPUT_PORT:-8001}:8080"
+    environment:
+      RUST_LOG: ${MANAGER_LOG_LEVEL:-info}
+      APP_ENV: ${APP_ENV:-dev}
+      GAMMA_API_BASE: ${GAMMA_API_BASE:-https://gamma-api.polymarket.com}
+      DATA_API_BASE: ${DATA_API_BASE:-https://data-api.polymarket.com}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-120}
+      TOP_MARKETS_LIMIT: ${TOP_MARKETS_LIMIT:-100}
+      TOP_EVENTS_LIMIT: ${TOP_EVENTS_LIMIT:-100}
+      MARKET_MAX_MINUTES_TO_END: ${MARKET_MAX_MINUTES_TO_END:-10}
+      ZERO_ELIGIBLE_FAIL_STREAK: ${ZERO_ELIGIBLE_FAIL_STREAK:-0}
+      DATABASE_URL: postgresql://${INPUT_DB_USER:-polybet_input}:${INPUT_DB_PASSWORD:-polybet_input_dev_password}@postgres:5432/${POSTGRES_DB:-polybet}
+      NATS_URL: nats://nats:4222
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
+      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
+      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
+      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
+      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .\manager\experiment-launcher:/app/experiment-launcher:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - polybet_net
+
+  resolution:
+    image: ${MANAGER_RESOLUTION_IMAGE:-polybet-manager-resolution:local}
+    build:
+      context: .\manager
+      dockerfile: Dockerfile.resolution
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    ports:
+      - "${RESOLUTION_PORT:-8002}:8080"
+    environment:
+      RUST_LOG: ${MANAGER_LOG_LEVEL:-info}
+      APP_ENV: ${APP_ENV:-dev}
+      GAMMA_API_BASE: ${GAMMA_API_BASE:-https://gamma-api.polymarket.com}
+      DATA_API_BASE: ${DATA_API_BASE:-https://data-api.polymarket.com}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-120}
+      TOP_MARKETS_LIMIT: ${TOP_MARKETS_LIMIT:-100}
+      TOP_EVENTS_LIMIT: ${TOP_EVENTS_LIMIT:-100}
+      MARKET_MAX_MINUTES_TO_END: ${MARKET_MAX_MINUTES_TO_END:-10}
+      ZERO_ELIGIBLE_FAIL_STREAK: ${ZERO_ELIGIBLE_FAIL_STREAK:-0}
+      DATABASE_URL: postgresql://${RESOLUTION_DB_USER:-polybet_resolution}:${RESOLUTION_DB_PASSWORD:-polybet_resolution_dev_password}@postgres:5432/${POSTGRES_DB:-polybet}
+      NATS_URL: nats://nats:4222
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
+      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
+      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
+      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
+      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .\manager\experiment-launcher:/app/experiment-launcher:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - polybet_net
+
+  observe:
+    image: ${MANAGER_OBSERVE_IMAGE:-polybet-manager-observe:local}
+    build:
+      context: .\manager
+      dockerfile: Dockerfile.observe
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    ports:
+      - "${MANAGER_PORT:-8000}:8080"
+    environment:
+      RUST_LOG: ${MANAGER_LOG_LEVEL:-info}
+      APP_ENV: ${APP_ENV:-dev}
+      GAMMA_API_BASE: ${GAMMA_API_BASE:-https://gamma-api.polymarket.com}
+      DATA_API_BASE: ${DATA_API_BASE:-https://data-api.polymarket.com}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-120}
+      TOP_MARKETS_LIMIT: ${TOP_MARKETS_LIMIT:-100}
+      TOP_EVENTS_LIMIT: ${TOP_EVENTS_LIMIT:-100}
+      MARKET_MAX_MINUTES_TO_END: ${MARKET_MAX_MINUTES_TO_END:-10}
+      ZERO_ELIGIBLE_FAIL_STREAK: ${ZERO_ELIGIBLE_FAIL_STREAK:-0}
+      DATABASE_URL: postgresql://${OBSERVE_DB_USER:-polybet_observe}:${OBSERVE_DB_PASSWORD:-polybet_observe_dev_password}@postgres:5432/${POSTGRES_DB:-polybet}
+      NATS_URL: nats://nats:4222
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
+      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
+      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
+      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
+      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .\manager\experiment-launcher:/app/experiment-launcher:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - polybet_net
+
+  signal_polymarket_sentiment:
+    <<: *signal-base
+
+  signal_pass_through:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${PASS_THROUGH_SIGNAL_KIND:-pass_through}
+      SIGNAL_ID: ${PASS_THROUGH_SIGNAL_ID:-signal-pass-through}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+    command: ["python", "pass_through.py"]
+
+networks:
+  polybet_net:
+    name: ${DOCKER_NETWORK_NAME:-polybet_net}
+
+volumes:
+  nats_data:
+    name: ${NATS_VOLUME_NAME:-polybet_nats_data}

@@ -1,0 +1,36 @@
+experiments:
+  - name: exp-follow-signal-sentiment
+    config: /app/configs/follow_signal_sentiment.yaml
+    module: strategies.signal_sentiment_follow
+
+  - name: exp-against-signal-sentiment
+    config: /app/configs/against_signal_sentiment.yaml
+    module: strategies.signal_sentiment_against
+
+  - name: exp-control-always-yes
+    config: /app/configs/always_yes.yaml
+    module: strategies.fixed_side
+
+  - name: exp-control-always-no
+    config: /app/configs/always_no.yaml
+    module: strategies.fixed_side
+
+  - name: exp-control-yes-75
+    config: /app/configs/yes_75.yaml
+    module: strategies.probabilistic_control
+    seeds: [21, 67, 420]
+
+  - name: exp-control-no-75
+    config: /app/configs/no_75.yaml
+    module: strategies.probabilistic_control
+    seeds: [21, 67, 420]
+
+  - name: exp-random
+    config: /app/configs/default.yaml
+    module: strategies.probabilistic_control
+    seeds: [1337]
+
+  - name: exp-control-pass-through
+    config: /app/configs/pass_through_control.yaml
+    module: strategies.pass_through_control
+
