@@ -16,7 +16,15 @@ struct MarketNewQuestionEvent {
     market_id: String,
     slug: Option<String>,
     question: String,
+    event_id: Option<String>,
+    start_date_raw: Option<String>,
     end_date_raw: Option<String>,
+    active: Option<bool>,
+    closed: Option<bool>,
+    accepting_orders: Option<bool>,
+    volume: Option<f64>,
+    liquidity: Option<f64>,
+    payload: Value,
     emitted_at: DateTime<Utc>,
 }
 
@@ -303,7 +311,15 @@ async fn sync_once(
                     market_id: market_id.clone(),
                     slug: slug.clone(),
                     question: question.clone().unwrap_or_default(),
+                    event_id: read_string_key(&raw, &["eventId", "event_id"]),
+                    start_date_raw: start_date_raw.clone(),
                     end_date_raw: end_date_raw.clone(),
+                    active,
+                    closed,
+                    accepting_orders,
+                    volume,
+                    liquidity,
+                    payload: raw.clone(),
                     emitted_at: Utc::now(),
                 });
             }
@@ -644,6 +660,20 @@ fn parse_string_array(value: &Value) -> Option<Vec<String>> {
         }
     }
 
+    None
+}
+
+fn read_string_key(raw: &Value, keys: &[&str]) -> Option<String> {
+    let obj = raw.as_object()?;
+    for key in keys {
+        if let Some(value) = obj.get(*key) {
+            match value {
+                Value::String(s) if !s.trim().is_empty() => return Some(s.clone()),
+                Value::Number(n) => return Some(n.to_string()),
+                _ => {}
+            }
+        }
+    }
     None
 }
 

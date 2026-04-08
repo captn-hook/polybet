@@ -239,7 +239,7 @@ def test_e2e_compose_status_and_data_contract() -> None:
         "input",
         "resolution",
         "observe",
-        "signal_polymarket_sentiment",
+        "signal_market_implied",
         env=compose_env,
     )
     if up.returncode != 0:

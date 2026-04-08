@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use axum::{routing::{get, post}, Router};
+use axum::{routing::get, Router};
 use chrono::Utc;
 use polybet_events::NatsClient;
 use reqwest::Client;
@@ -9,7 +9,6 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
 mod api;
-mod launcher;
 mod observe;
 mod settings;
 mod types;
@@ -51,12 +50,7 @@ async fn main() -> anyhow::Result<()> {
         nats: nats.clone(),
         gamma_base: settings.gamma_api_base.clone(),
         data_base: String::new(),
-        launcher_manifest_path: settings.launcher_manifest_path.clone(),
-        launcher_docker_base: settings.launcher_docker_base.clone(),
-        launcher_experiment_image: settings.launcher_experiment_image.clone(),
-        launcher_experiment_config_bind: settings.launcher_experiment_config_bind.clone(),
         zero_eligible_fail_streak: settings.zero_eligible_fail_streak,
-        launcher_enabled: true,
         observe_events: Arc::new(tokio::sync::RwLock::new(ObserveEventsState {
             total_events: 0,
             topics: HashMap::new(),
@@ -64,7 +58,6 @@ async fn main() -> anyhow::Result<()> {
     });
 
     observe::start_observe_loop(state.clone());
-    launcher::start_launcher_loop(state.clone(), 15);
 
     let app = Router::new()
         .route("/health", get(api::health))
@@ -72,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/observability", get(api::observability))
         .route("/api/sync/status", get(api::get_sync_status))
         .route("/api/launcher/status", get(api::get_launcher_status))
-        .route("/api/launcher/reconcile", post(api::trigger_launcher_reconcile))
+        .route("/api/dashboard/live", get(api::dashboard_live))
         .route("/dashboard", get(api::dashboard))
         .with_state(state);
 

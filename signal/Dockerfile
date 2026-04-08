@@ -9,5 +9,5 @@ COPY common/python/ /app/common/python/
 
 RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
 
-CMD ["sh", "-c", "echo 'signal container started'; if [ -f main.py ]; then exec python main.py; fi; sleep infinity"]
+CMD ["sh", "-c", "echo 'signal container started'; if [ -f market_implied.py ]; then exec python market_implied.py; elif [ -f main.py ]; then exec python main.py; fi; sleep infinity"]
 

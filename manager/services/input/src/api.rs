@@ -5,7 +5,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Serialize;
 
-use crate::types::AppState;
+use crate::{launcher::reconcile_launcher, types::AppState};
 
 #[derive(Debug, Serialize)]
 pub struct SyncStatusResponse {
@@ -14,6 +14,24 @@ pub struct SyncStatusResponse {
     pub eligible_markets: i64,
     pub zero_eligible_streak: i64,
     pub events_synced: i64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LaunchResult {
+    pub launched: usize,
+    pub stopped: usize,
+    pub running: usize,
+    pub desired: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LauncherStatusResponse {
+    pub last_success: Option<DateTime<Utc>>,
+    pub desired_instances: i64,
+    pub running_instances: i64,
+    pub launched_last_run: i64,
+    pub stopped_last_run: i64,
     pub last_error: Option<String>,
 }
 
@@ -85,4 +103,55 @@ pub async fn get_sync_status(
     };
 
     Ok(Json(response))
+}
+
+pub async fn get_launcher_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<LauncherStatusResponse>, axum::http::StatusCode> {
+    let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, i64, i64, i64, i64, Option<String>)>(
+        r#"
+        SELECT last_success, desired_instances, running_instances, launched_last_run, stopped_last_run, last_error
+        FROM launcher_status
+        WHERE id = 1
+        "#,
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let response = match row {
+        Some((last_success, desired_instances, running_instances, launched_last_run, stopped_last_run, last_error)) => {
+            LauncherStatusResponse {
+                last_success,
+                desired_instances,
+                running_instances,
+                launched_last_run,
+                stopped_last_run,
+                last_error,
+            }
+        }
+        None => LauncherStatusResponse {
+            last_success: None,
+            desired_instances: 0,
+            running_instances: 0,
+            launched_last_run: 0,
+            stopped_last_run: 0,
+            last_error: None,
+        },
+    };
+    Ok(Json(response))
+}
+
+pub async fn trigger_launcher_reconcile(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<LaunchResult>, axum::http::StatusCode> {
+    let result = reconcile_launcher(&state)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(LaunchResult {
+        launched: result.launched,
+        stopped: result.stopped,
+        running: result.running,
+        desired: result.desired,
+    }))
 }

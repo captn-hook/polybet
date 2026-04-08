@@ -112,7 +112,7 @@ Use `.env.template` as the source of truth. Most important groups:
 3. Input sync behavior: `GAMMA_API_BASE`, `DATA_API_BASE`, `SYNC_INTERVAL_SECONDS`, `TOP_MARKETS_LIMIT`, `TOP_EVENTS_LIMIT`, `MARKET_MAX_MINUTES_TO_END`, `ZERO_ELIGIBLE_FAIL_STREAK`.
 4. Signal workers: `SIGNAL_KIND`, `SIGNAL_ID`, `MARKET_NEW_QUESTION_TOPIC`, `SIGNAL_OUTPUT_TOPIC`.
 5. Experiments: `EXPERIMENT_CONFIG_PATH`, `EXPERIMENT_SIGNAL_TOPIC`, `PREDICTION_OUTPUT_TOPIC`, `EXPERIMENT_SEED`.
-6. Launcher/ops: `LAUNCHER_*`, backup vars, per-role DB credentials.
+6. Launcher (owned by input) + ops: `LAUNCHER_*`, backup vars, per-role DB credentials.
 
 ## Durable data and replayability
 

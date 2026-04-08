@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use axum::{routing::get, Router};
+use axum::{routing::{get, post}, Router};
 use chrono::Utc;
 use polybet_db::run_migrations;
 use polybet_events::NatsClient;
@@ -10,6 +10,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
 mod api;
+mod launcher;
 mod settings;
 mod sync;
 mod types;
@@ -38,7 +39,17 @@ async fn main() -> anyhow::Result<()> {
         .connect(&settings.database_url)
         .await
         .context("failed to connect to postgres")?;
-    run_migrations(&db).await?;
+
+    if let Some(migration_url) = settings.migration_database_url.as_deref() {
+        let migration_db = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(migration_url)
+            .await
+            .context("failed to connect to postgres migration database")?;
+        run_migrations(&migration_db).await?;
+    } else {
+        run_migrations(&db).await?;
+    }
     let nats = NatsClient::connect(&settings.nats_url).await?;
 
     let state = Arc::new(AppState {
@@ -51,6 +62,10 @@ async fn main() -> anyhow::Result<()> {
         nats: nats.clone(),
         gamma_base: settings.gamma_api_base.clone(),
         data_base: settings.data_api_base.clone(),
+        launcher_manifest_path: settings.launcher_manifest_path.clone(),
+        launcher_docker_base: settings.launcher_docker_base.clone(),
+        launcher_experiment_image: settings.launcher_experiment_image.clone(),
+        launcher_experiment_config_bind: settings.launcher_experiment_config_bind.clone(),
         observe_events: Arc::new(tokio::sync::RwLock::new(ObserveEventsState {
             total_events: 0,
             topics: HashMap::new(),
@@ -65,11 +80,14 @@ async fn main() -> anyhow::Result<()> {
         settings.market_max_minutes_to_end,
         settings.zero_eligible_fail_streak,
     );
+    launcher::start_launcher_loop(state.clone(), 15);
 
     let app = Router::new()
         .route("/health", get(api::health))
         .route("/status", get(api::status))
         .route("/api/sync/status", get(api::get_sync_status))
+        .route("/api/launcher/status", get(api::get_launcher_status))
+        .route("/api/launcher/reconcile", post(api::trigger_launcher_reconcile))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], settings.manager_port));

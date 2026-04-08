@@ -26,8 +26,8 @@ x-signal-base: &signal-base
     dockerfile: .\signal\Dockerfile
   environment:
     <<: *worker-env
-    SIGNAL_KIND: ${SIGNAL_KIND:-polymarket_sentiment}
-    SIGNAL_ID: ${SIGNAL_ID:-signal-poly-sentiment}
+    SIGNAL_KIND: ${SIGNAL_KIND:-market_implied}
+    SIGNAL_ID: ${SIGNAL_ID:-signal-market-implied}
     SIGNAL_POLL_INTERVAL_SEC: ${SIGNAL_POLL_INTERVAL_SEC:-15}
     SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
 
@@ -134,17 +134,12 @@ services:
       MARKET_MAX_MINUTES_TO_END: ${MARKET_MAX_MINUTES_TO_END:-10}
       ZERO_ELIGIBLE_FAIL_STREAK: ${ZERO_ELIGIBLE_FAIL_STREAK:-0}
       DATABASE_URL: postgresql://${INPUT_DB_USER:-polybet_input}:${INPUT_DB_PASSWORD:-polybet_input_dev_password}@postgres:5432/${POSTGRES_DB:-polybet}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgresql://${POSTGRES_USER:-polybet}:${POSTGRES_PASSWORD:-polybet_dev_password}@postgres:5432/${POSTGRES_DB:-polybet}}
       NATS_URL: nats://nats:4222
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
-      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
-      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
-      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
-      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - .\manager\experiment-launcher:/app/experiment-launcher:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
       interval: 10s
@@ -225,14 +220,8 @@ services:
       NATS_URL: nats://nats:4222
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
-      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
-      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
-      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
-      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - .\manager\experiment-launcher:/app/experiment-launcher:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
       interval: 10s
@@ -242,8 +231,9 @@ services:
     networks:
       - polybet_net
 
-  signal_polymarket_sentiment:
+  signal_market_implied:
     <<: *signal-base
+    command: ["python", "market_implied.py"]
 
   signal_pass_through:
     <<: *signal-base
@@ -254,6 +244,48 @@ services:
       SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
       MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
     command: ["python", "pass_through.py"]
+
+  signal_outcome_labels:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${OUTCOME_LABELS_SIGNAL_KIND:-outcome_labels}
+      SIGNAL_ID: ${OUTCOME_LABELS_SIGNAL_ID:-signal-outcome-labels}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+    command: ["python", "outcome_labels.py"]
+
+  signal_market_metadata:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${MARKET_METADATA_SIGNAL_KIND:-market_metadata}
+      SIGNAL_ID: ${MARKET_METADATA_SIGNAL_ID:-signal-market-metadata}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+    command: ["python", "market_metadata.py"]
+
+  signal_clob_microstructure:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${CLOB_MICROSTRUCTURE_SIGNAL_KIND:-clob_microstructure}
+      SIGNAL_ID: ${CLOB_MICROSTRUCTURE_SIGNAL_ID:-signal-clob-microstructure}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+      CLOB_API_BASE: ${CLOB_API_BASE:-https://clob.polymarket.com}
+    command: ["python", "clob_microstructure.py"]
+
+  signal_open_interest:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${OPEN_INTEREST_SIGNAL_KIND:-open_interest}
+      SIGNAL_ID: ${OPEN_INTEREST_SIGNAL_ID:-signal-open-interest}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+      DATA_API_BASE: ${DATA_API_BASE:-https://data-api.polymarket.com}
+    command: ["python", "open_interest.py"]
 
 networks:
   polybet_net:

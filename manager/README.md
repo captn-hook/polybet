@@ -21,6 +21,7 @@ Singleton services:
    - emits `market.new_question.v1`
    - emits `market.resolution.changed.v1` only for previously emitted markets
    - persists canonical/snapshot market data
+   - owns launcher reconcile loop and writes launcher state tables
 2. `resolution`
    - consumes `prediction.proposed.v1`
    - applies resolution updates
@@ -53,6 +54,8 @@ cargo test --workspace
   - `GET /health`
   - `GET /status`
   - `GET /api/sync/status`
+  - `GET /api/launcher/status`
+  - `POST /api/launcher/reconcile`
 - Resolution:
   - `GET /health`
 - Observe:
@@ -61,7 +64,6 @@ cargo test --workspace
   - `GET /observability`
   - `GET /api/sync/status`
   - `GET /api/launcher/status`
-  - `POST /api/launcher/reconcile`
   - `GET /dashboard`
 
 ## Environment (high-value)
@@ -80,7 +82,7 @@ Input-specific:
 - `MARKET_MAX_MINUTES_TO_END`
 - `ZERO_ELIGIBLE_FAIL_STREAK`
 
-Observe-specific:
+Input-specific (launcher):
 - `LAUNCHER_MANIFEST_PATH`
 - `LAUNCHER_DOCKER_BASE`
 - `LAUNCHER_EXPERIMENT_IMAGE`

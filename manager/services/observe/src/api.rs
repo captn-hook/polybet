@@ -2,15 +2,17 @@ use std::{collections::{HashMap, HashSet}, sync::Arc};
 
 use axum::{
     extract::State,
+    response::sse::{Event, KeepAlive, Sse},
     response::{Html, IntoResponse},
     Json,
 };
 use chrono::{DateTime, Utc};
+use futures_util::stream;
+use std::time::Duration;
 use serde_json::json;
 
 use crate::{
-    launcher::reconcile_launcher,
-    types::{AppState, LaunchResult, LauncherStatusResponse, SyncStatusResponse},
+    types::{AppState, LauncherStatusResponse, SyncStatusResponse},
     util::html_escape,
 };
 
@@ -56,6 +58,20 @@ pub async fn observability(
         "ok": true,
         "observability": snapshot,
     })))
+}
+
+pub async fn dashboard_live(
+    State(state): State<Arc<AppState>>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>>, axum::http::StatusCode> {
+    let stream = stream::unfold(state, |state| async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let payload = status(State(state.clone())).await.ok().map(|j| j.0).unwrap_or_else(|| json!({}));
+        let event = Event::default()
+            .event("dashboard")
+            .data(serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()));
+        Some((Ok::<Event, std::convert::Infallible>(event), state))
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 pub async fn status(
@@ -240,7 +256,7 @@ pub async fn status(
             unresolved_resolved_rows
         ));
     }
-    if state.launcher_enabled && running_instances < desired_instances {
+    if running_instances < desired_instances {
         alerts.push(format!(
             "launcher running_instances ({}) below desired_instances ({})",
             running_instances, desired_instances
@@ -366,15 +382,6 @@ pub async fn get_launcher_status(
     Ok(Json(response))
 }
 
-pub async fn trigger_launcher_reconcile(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<LaunchResult>, axum::http::StatusCode> {
-    let result = reconcile_launcher(&state)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(result))
-}
-
 pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String>, axum::http::StatusCode> {
     let sync_row = sqlx::query_as::<_, (Option<DateTime<Utc>>, i64, i64, i64, i64, Option<String>)>(
         "SELECT last_success, markets_synced, eligible_markets, zero_eligible_streak, events_synced, last_error FROM manager_sync_status WHERE id = 1",
@@ -468,6 +475,29 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
+
+    let leaderboard_rows_raw = sqlx::query_as::<_, (String, i64, i64, f64, f64, Option<DateTime<Utc>>)>(
+            r#"
+        SELECT
+            p.experiment_id,
+            COUNT(*)::bigint AS resolved_count,
+            SUM(CASE WHEN p.side = mo.winning_side THEN 1 ELSE 0 END)::bigint AS correct_count,
+            AVG(CASE WHEN p.side = mo.winning_side THEN 1.0 ELSE 0.0 END)::double precision AS accuracy,
+            AVG(p.confidence)::double precision AS avg_confidence,
+            MAX(p.created_at) AS last_prediction
+        FROM experiment_predictions p
+        JOIN market_outcomes mo ON mo.market_id = p.market_id
+        WHERE mo.winning_side IN ('YES','NO')
+        GROUP BY p.experiment_id
+        ORDER BY accuracy DESC, resolved_count DESC, last_prediction DESC
+        LIMIT 50
+        "#,
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let observe_snapshot = state.observe_events.read().await.clone();
 
     let latest_bets = sqlx::query_as::<_, (
         String,
@@ -794,6 +824,53 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         ));
     }
 
+    let mut leaderboard_rows = String::new();
+    for (experiment_id, resolved_count, correct_count, accuracy, avg_confidence, last_prediction) in leaderboard_rows_raw {
+        leaderboard_rows.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td class=\"{}\">{:.2}%</td><td>{:.4}</td><td>{}</td></tr>",
+            html_escape(&experiment_id),
+            resolved_count,
+            correct_count,
+            if accuracy >= 0.5 { "ok" } else { "bad" },
+            accuracy * 100.0,
+            avg_confidence,
+            last_prediction
+                .map(|ts| ts.to_rfc3339())
+                .unwrap_or_else(|| "-".to_string()),
+        ));
+    }
+
+    let mut queue_rows: Vec<(String, u64, Option<DateTime<Utc>>, Option<String>)> = observe_snapshot
+        .topics
+        .iter()
+        .map(|(topic, state)| {
+            (
+                topic.clone(),
+                state.count,
+                state.last_received_at,
+                state.last_payload_json.clone(),
+            )
+        })
+        .collect();
+    queue_rows.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut queue_rows_html = String::new();
+    for (topic, count, last_received_at, last_payload_json) in queue_rows.into_iter().take(50) {
+        let preview = last_payload_json
+            .unwrap_or_else(|| "-".to_string())
+            .chars()
+            .take(160)
+            .collect::<String>();
+        queue_rows_html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td></tr>",
+            html_escape(&topic),
+            count,
+            last_received_at
+                .map(|ts| ts.to_rfc3339())
+                .unwrap_or_else(|| "-".to_string()),
+            html_escape(&preview),
+        ));
+    }
+
     let mut launcher_rows = String::new();
     for (container_name, experiment_name, seed, status, updated_at) in launcher_instances {
         launcher_rows.push_str(&format!(
@@ -832,7 +909,6 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="refresh" content="5" />
     <title>Polybet Manager Dashboard</title>
     <style>
       body {{ font-family: system-ui, sans-serif; margin: 20px; }}
@@ -917,6 +993,8 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         }};
 
         paginate('tbl-launcher', 20);
+        paginate('tbl-leaderboard', 20);
+        paginate('tbl-event-queue', 20);
         paginate('tbl-signals', 20);
         paginate('tbl-exp-metrics', 20);
         paginate('tbl-bets-outstanding', 20);
@@ -924,12 +1002,20 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         paginate('tbl-predictions', 20);
         paginate('tbl-markets', 20);
         paginate('tbl-resolved-markets', 20);
+
+        const live = new EventSource('/api/dashboard/live');
+        live.addEventListener('dashboard', () => {{
+          window.location.reload();
+        }});
+        live.onerror = () => {{
+          live.close();
+        }};
       }});
     </script>
   </head>
   <body>
     <h1>Polybet Manager Dashboard</h1>
-    <p class="muted">Auto-refresh every 5s</p>
+    <p class="muted">Live updates via server-sent events</p>
 
     <details class="section" data-section-id="system-overview" open>
       <summary>System Overview</summary>
@@ -996,6 +1082,30 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
       <table id="tbl-exp-metrics">
         <thead>
           <tr><th>Experiment</th><th>Predictions</th><th>Outstanding Bets</th><th>Resolved Bets</th><th>Avg Confidence</th><th>YES Rate</th><th>Last Prediction</th></tr>
+        </thead>
+        <tbody>{}</tbody>
+      </table>
+    </details>
+
+    <details class="section" data-section-id="experiment-leaderboard" open>
+      <summary>Experiment Leaderboard (Resolved Markets)</summary>
+      <table id="tbl-leaderboard">
+        <thead>
+          <tr><th>Experiment</th><th>Resolved</th><th>Correct</th><th>Accuracy</th><th>Avg Confidence</th><th>Last Prediction</th></tr>
+        </thead>
+        <tbody>{}</tbody>
+      </table>
+    </details>
+
+    <details class="section" data-section-id="event-queue" open>
+      <summary>Live Event Queue View</summary>
+      <div class="cards">
+        <div class="card"><strong>Total Observed Events</strong><div>{}</div></div>
+        <div class="card"><strong>Observed Topics</strong><div>{}</div></div>
+      </div>
+      <table id="tbl-event-queue">
+        <thead>
+          <tr><th>Topic</th><th>Count</th><th>Last Received</th><th>Last Payload Preview</th></tr>
         </thead>
         <tbody>{}</tbody>
       </table>
@@ -1090,6 +1200,10 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         signal_summary.0,
         signal_rows,
         rollup_rows,
+        leaderboard_rows,
+        observe_snapshot.total_events,
+        observe_snapshot.topics.len(),
+        queue_rows_html,
         outstanding_count,
         resolved_count,
         outstanding_rows,
