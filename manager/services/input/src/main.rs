@@ -86,7 +86,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(api::health))
         .route("/status", get(api::status))
         .route("/api/sync/status", get(api::get_sync_status))
-        .route("/api/launcher/status", get(api::get_launcher_status))
         .route("/api/launcher/reconcile", post(api::trigger_launcher_reconcile))
         .with_state(state);
 

@@ -20,14 +20,14 @@ Singleton services:
    - computes eligibility once
    - emits `market.new_question.v1`
    - emits `market.resolution.changed.v1` only for previously emitted markets
-   - persists canonical/snapshot market data
+   - persists canonical/snapshot market data and gamma-derived market outcome updates
    - owns launcher reconcile loop and writes launcher state tables
 2. `resolution`
    - consumes `prediction.proposed.v1`
-   - applies resolution updates
-   - persists `experiment_predictions`, `market_outcomes`
+   - persists `experiment_predictions`
    - emits and persists `resolution.error.v1`
    - consumes and persists all `*.error.v1` to `error_events`
+   - does not consume `market.resolution.changed.v1` and does not write `market_outcomes`
 3. `observe`
    - projects canonical events for operational visibility
    - serves `/dashboard`, `/status`, `/observability`
@@ -54,7 +54,6 @@ cargo test --workspace
   - `GET /health`
   - `GET /status`
   - `GET /api/sync/status`
-  - `GET /api/launcher/status`
   - `POST /api/launcher/reconcile`
 - Resolution:
   - `GET /health`
@@ -91,6 +90,8 @@ Input-specific (launcher):
 ## Operational notes
 
 - `input` and `resolution` should remain singletons for authoritative ownership.
+- `market_outcomes` is currently input-owned (gamma-derived updates during sync).
+- `market_tracking` is reserved for resolution retry/backoff scheduling state.
 - `observe` can scale horizontally.
 - Use least-privilege DB roles:
   - `polybet_input`

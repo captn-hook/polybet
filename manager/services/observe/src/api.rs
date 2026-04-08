@@ -1004,8 +1004,42 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         paginate('tbl-resolved-markets', 20);
 
         const live = new EventSource('/api/dashboard/live');
-        live.addEventListener('dashboard', () => {{
-          window.location.reload();
+        live.addEventListener('dashboard', (ev) => {{
+          try {{
+            const payload = JSON.parse(ev.data || '{{}}');
+            const sync = payload.sync || {{}};
+            const launcher = payload.launcher || {{}};
+            const setText = (id, value) => {{
+              const el = document.getElementById(id);
+              if (el && value !== undefined && value !== null) el.textContent = String(value);
+            }};
+            const setClass = (id, value) => {{
+              const el = document.getElementById(id);
+              if (!el || !value) return;
+              const cls = String(value).toLowerCase();
+              el.classList.remove('ok', 'warn', 'bad', 'muted');
+              if (cls === 'ok' || cls === 'warn' || cls === 'bad' || cls === 'muted') {{
+                el.classList.add(cls);
+              }}
+            }};
+            setText('s-sync-last-success', sync.last_success ?? 'never');
+            setText('s-sync-markets-synced', sync.markets_synced ?? 0);
+            setText('s-sync-eligible-markets', sync.eligible_markets ?? 0);
+            setText('s-sync-zero-eligible-streak', sync.zero_eligible_streak ?? 0);
+            setText('s-sync-events-synced', sync.events_synced ?? 0);
+            setText('s-sync-last-error', sync.last_error ?? '-');
+            setClass('s-sync-last-error', (sync.last_error && sync.last_error !== '-') ? 'bad' : 'muted');
+
+            setText('s-launcher-last-success', launcher.last_success ?? 'never');
+            setText('s-launcher-desired', launcher.desired_instances ?? 0);
+            setText('s-launcher-running', launcher.running_instances ?? 0);
+            setText('s-launcher-launched', launcher.launched_last_run ?? 0);
+            setText('s-launcher-stopped', launcher.stopped_last_run ?? 0);
+            setText('s-launcher-last-error', launcher.last_error ?? '-');
+            setClass('s-launcher-last-error', (launcher.last_error && launcher.last_error !== '-') ? 'bad' : 'muted');
+          }} catch (_) {{
+            // Ignore malformed events and keep stream alive.
+          }}
         }});
         live.onerror = () => {{
           live.close();
@@ -1031,27 +1065,27 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
     <details class="section" data-section-id="sync-status" open>
       <summary>Gamma/Data Sync</summary>
       <div class="cards">
-        <div class="card"><strong>Last Sync Markets</strong><div>{}</div></div>
-        <div class="card"><strong>Eligible Markets</strong><div>{}</div></div>
-        <div class="card"><strong>Zero Eligible Streak</strong><div>{}</div></div>
-        <div class="card"><strong>Last Sync Events</strong><div>{}</div></div>
-        <div class="card"><strong>Last Success</strong><div>{}</div></div>
+        <div class="card"><strong>Last Sync Markets</strong><div id="s-sync-markets-synced">{}</div></div>
+        <div class="card"><strong>Eligible Markets</strong><div id="s-sync-eligible-markets">{}</div></div>
+        <div class="card"><strong>Zero Eligible Streak</strong><div id="s-sync-zero-eligible-streak">{}</div></div>
+        <div class="card"><strong>Last Sync Events</strong><div id="s-sync-events-synced">{}</div></div>
+        <div class="card"><strong>Last Success</strong><div id="s-sync-last-success">{}</div></div>
         <div class="card"><strong>Latest Signal Side</strong><div>{}</div></div>
         <div class="card"><strong>Latest Signal Market</strong><div>{}</div></div>
       </div>
-      <p><strong>Sync Error:</strong> {}</p>
+      <p><strong>Sync Error:</strong> <span id="s-sync-last-error">{}</span></p>
     </details>
 
     <details class="section" data-section-id="launcher" open>
       <summary>Launcher</summary>
       <div class="cards">
-        <div class="card"><strong>Desired</strong><div>{}</div></div>
-        <div class="card"><strong>Running</strong><div>{}</div></div>
-        <div class="card"><strong>Launched (last)</strong><div>{}</div></div>
-        <div class="card"><strong>Stopped (last)</strong><div>{}</div></div>
-        <div class="card"><strong>Last Reconcile</strong><div>{}</div></div>
+        <div class="card"><strong>Desired</strong><div id="s-launcher-desired">{}</div></div>
+        <div class="card"><strong>Running</strong><div id="s-launcher-running">{}</div></div>
+        <div class="card"><strong>Launched (last)</strong><div id="s-launcher-launched">{}</div></div>
+        <div class="card"><strong>Stopped (last)</strong><div id="s-launcher-stopped">{}</div></div>
+        <div class="card"><strong>Last Reconcile</strong><div id="s-launcher-last-success">{}</div></div>
       </div>
-      <p><strong>Launcher Error:</strong> {}</p>
+      <p><strong>Launcher Error:</strong> <span id="s-launcher-last-error">{}</span></p>
       <table id="tbl-launcher">
         <thead>
           <tr><th>Container</th><th>Experiment</th><th>Seed</th><th>Status</th><th>Updated</th></tr>

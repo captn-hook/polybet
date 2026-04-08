@@ -10,7 +10,7 @@ Ownership flow:
 1. Discover eligible markets once (`market.new_question.v1`) in `input`.
 2. Compute standardized signals (`signal.computed.v1`) in signal workers.
 3. Generate experiment predictions (`prediction.proposed.v1`) in experiment workers.
-4. Score outcomes durably in `resolution` with idempotent persistence.
+4. Resolve market outcomes durably in `input` from gamma sync data.
 5. Fail loudly via `*.error.v1`, and persist errors to `error_events`.
 6. Keep system observable via `observe` endpoints and test suites.
 
@@ -41,7 +41,7 @@ Critical invariant:
 | Event | Emitted by | Consumed by | Durable write owner |
 | --- | --- | --- | --- |
 | `market.new_question.v1` | `input` | signal workers, experiment workers, `observe` | `input` (`markets`, snapshots, emit tracking) |
-| `market.resolution.changed.v1` | `input` | `resolution`, `observe` | `input`/`resolution` (`market_outcomes`) |
+| `market.resolution.changed.v1` | `input` | `observe` | `input` (`market_outcomes`) |
 | `signal.computed.v1` | signal workers | experiment workers, `observe` | signal path (`signal_outputs`) |
 | `prediction.proposed.v1` | experiment workers | `resolution`, `observe` | `resolution` (`experiment_predictions`) |
 | `market.error.v1` | `input` | `resolution`, `observe` | `resolution` (`error_events`) |
@@ -119,7 +119,8 @@ Use `.env.template` as the source of truth. Most important groups:
 v0.1 keeps historical and latest-state surfaces needed for reruns:
 - markets and history: `markets`, `market_snapshots`, `gamma_markets`
 - events and history: `events`, `event_snapshots`, `gamma_events`
-- outcomes: `market_outcomes`
+- outcomes: `market_outcomes` (owned by `input` from gamma-derived updates)
+- retry scheduling state: `market_tracking` (for timed resolution retries/backoff)
 - signals: `signal_outputs`
 - predictions: `experiment_predictions`
 - errors/audit: `error_events`

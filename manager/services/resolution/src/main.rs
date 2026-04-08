@@ -42,6 +42,11 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         db: db.clone(),
         nats: nats.clone(),
+        gamma_base: settings.gamma_api_base.clone(),
+        resolution_sweep_interval_seconds: settings.resolution_sweep_interval_seconds,
+        resolution_retry_base_minutes: settings.resolution_retry_base_minutes,
+        resolution_retry_max_minutes: settings.resolution_retry_max_minutes,
+        resolution_retry_batch_size: settings.resolution_retry_batch_size,
     });
 
     resolution::start_resolution_loop(state.clone());

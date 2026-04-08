@@ -50,6 +50,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - ${POSTGRES_DATA_PATH:-.\data\postgres}:/var/lib/postgresql/data
+      - .\postgres\init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-polybet} -d ${POSTGRES_DB:-polybet}"]
       interval: 5s
@@ -138,8 +139,14 @@ services:
       NATS_URL: nats://nats:4222
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
+      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
+      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
+      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
+      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - .\manager\experiment-launcher:/app/experiment-launcher:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
       interval: 10s
@@ -176,14 +183,8 @@ services:
       NATS_URL: nats://nats:4222
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       ENABLE_PAPER_TRADING: ${ENABLE_PAPER_TRADING:-true}
-      LAUNCHER_MANIFEST_PATH: ${LAUNCHER_MANIFEST_PATH:-/app/experiment-launcher/manifest.yaml}
-      LAUNCHER_DOCKER_BASE: ${LAUNCHER_DOCKER_BASE:-http://host.docker.internal:2375}
-      LAUNCHER_EXPERIMENT_IMAGE: ${LAUNCHER_EXPERIMENT_IMAGE:-polybet-experiment:local}
-      LAUNCHER_EXPERIMENT_CONFIG_BIND: ${LAUNCHER_EXPERIMENT_CONFIG_BIND:-G:\polybet\experiment\configs:/app/configs:ro}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - .\manager\experiment-launcher:/app/experiment-launcher:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/health || exit 1"]
       interval: 10s

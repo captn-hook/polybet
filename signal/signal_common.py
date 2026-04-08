@@ -1,4 +1,5 @@
 import asyncio
+import nats.errors
 import os
 import sys
 import urllib.parse
@@ -109,7 +110,11 @@ async def run_signal_loop(
     print(f"[{service_name}] listening source={source_topic} output={output_topic} signal_id={signal_id}")
 
     while True:
-        msg = await sub.next_msg(timeout=60)
+        try:
+            msg = await sub.next_msg(timeout=60)
+        except nats.errors.TimeoutError:
+            # Idle poll window elapsed without new messages.
+            continue
         event = PolyNats.decode_json(msg)
         market_id = _extract_market_id(event)
         if not market_id:

@@ -751,23 +751,39 @@ async fn fetch_events(client: &Client, gamma_base: &str, limit: i64) -> anyhow::
     let base = gamma_base.trim_end_matches('/');
     let page_size = limit.clamp(10, 100);
     let max_pages = 10_i64;
-    let mut out = Vec::new();
+    let query_variants = [
+        // Prefer latest IDs to catch rolling short-window markets (e.g. btc-updown-5m)
+        "active=true&closed=false&order=id&ascending=false",
+        // Keep the old earliest-endDate scan so long-horizon active events are still represented
+        "active=true&closed=false&order=endDate&ascending=true",
+    ];
 
-    for page in 0..max_pages {
-        let offset = page * page_size;
-        let url = format!(
-            "{}/events?active=true&closed=false&limit={}&offset={}",
-            base, page_size, offset
-        );
-        let res = client.get(url).send().await?.error_for_status()?;
-        let body = res.json::<Value>().await?;
-        let page_events = parse_events_response(body)?;
-        if page_events.is_empty() {
-            break;
+    let mut all_events = Vec::new();
+    for filters in query_variants {
+        for page in 0..max_pages {
+            let offset = page * page_size;
+            let url = format!(
+                "{}/events?{}&limit={}&offset={}",
+                base, filters, page_size, offset
+            );
+            let res = client.get(url).send().await?.error_for_status()?;
+            let body = res.json::<Value>().await?;
+            let page_events = parse_events_response(body)?;
+            if page_events.is_empty() {
+                break;
+            }
+            all_events.extend(page_events);
         }
-        out.extend(page_events);
     }
-    Ok(out)
+
+    let mut deduped: HashMap<String, ParsedEvent> = HashMap::new();
+    for event in all_events {
+        if event.event_id.is_empty() {
+            continue;
+        }
+        deduped.entry(event.event_id.clone()).or_insert(event);
+    }
+    Ok(deduped.into_values().collect())
 }
 
 fn extract_markets_from_events(events: &[ParsedEvent]) -> Vec<ParsedMarket> {
