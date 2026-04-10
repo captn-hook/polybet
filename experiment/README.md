@@ -32,14 +32,11 @@ Generates signals from `gamma_markets` payload data for resolved markets. Uses p
 Signal kinds generated: `market_implied`, `market_metadata`, `outcome_labels`, `question`, `clob_microstructure`, `orderbook_depth_derived`.
 
 ```bash
-# Standalone DB + NATS backfill
+# Full backfill: write to DB + emit to NATS (run while experiments are listening)
 python backfill.py
 
-# Replay existing signals to NATS (no DB writes)
-python backfill.py --replay-nats
-
-# DB-only (no NATS)
-python backfill.py --no-nats
+# DB-only (for startup, no NATS needed)
+python backfill.py --db-only
 ```
 
 ## Active experiments

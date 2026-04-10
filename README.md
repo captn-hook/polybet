@@ -121,15 +121,15 @@ Use `.env.template` as the source of truth. Most important groups:
 The backfill system generates signals from stored market data for historical experiments:
 
 ```bash
-# DB-only backfill (runs automatically on experiment startup)
+# Full backfill: DB + NATS (run once while experiments are listening)
 docker run --rm --network polybet_net \
   -e DATABASE_URL="..." -e NATS_URL="..." \
-  polybet-experiment:local python backfill.py --no-nats
+  polybet-experiment:local python backfill.py
 
-# Replay to NATS (run once while experiments are listening)
-docker run --rm --network polybet_net \
-  -e DATABASE_URL="..." -e NATS_URL="..." \
-  polybet-experiment:local python backfill.py --replay-nats
+# Full recompute from raw data:
+# 1. Clear derived tables (signal_outputs, experiment_predictions, error_events, market_tracking)
+# 2. Start all experiments (they do DB-only backfill on startup)
+# 3. Run standalone backfill (writes to DB + emits to NATS for predictions)
 ```
 
 Signal kinds backfilled from `gamma_markets` payload: `market_implied`, `market_metadata`, `outcome_labels`, `question`, `clob_microstructure`, `orderbook_depth_derived`.

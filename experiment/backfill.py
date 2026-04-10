@@ -350,62 +350,23 @@ class MarketBackfiller:
 # Standalone entry point
 # ---------------------------------------------------------------------------
 
-async def replay_nats(db_dsn: str, nats_client: Any, throttle_ms: int = 10) -> int:
-    """Re-publish existing backfill signals from DB to NATS (deduplicated, no DB writes)."""
-    throttle_s = throttle_ms / 1000.0
-    published = 0
-    current_market = None
-    with psycopg.connect(db_dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT ON (market_id, signal_kind)
-                       market_id, payload_json
-                FROM signal_outputs
-                WHERE signal_id LIKE 'backfill-%%'
-                ORDER BY market_id, signal_kind, id DESC
-            """)
-            for market_id, payload_json in cur:
-                payload = payload_json if isinstance(payload_json, dict) else {}
-                if not payload:
-                    continue
-                kind = payload.get("signal_kind", "unknown")
-                await nats_client.publish_json(f"{SIGNAL_TOPIC}.{kind}", payload)
-                published += 1
-                if market_id != current_market:
-                    current_market = market_id
-                    if throttle_s > 0:
-                        await asyncio.sleep(throttle_s)
-    return published
-
-
 async def _run_standalone() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Backfill signal_outputs for resolved markets")
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--no-nats", action="store_true", help="Skip NATS emission")
-    parser.add_argument("--replay-nats", action="store_true", help="Re-emit existing backfill signals to NATS")
+    parser.add_argument("--db-only", action="store_true", help="Write to DB only, skip NATS")
     parser.add_argument("--dsn", default=os.getenv(
         "DATABASE_URL", "postgresql://polybet:polybet_dev_password@postgres:5432/polybet"))
     args = parser.parse_args()
 
     from polybet_nats import PolyNats
-    nats_url = os.getenv("NATS_URL", "nats://nats:4222")
-
-    if args.replay_nats:
-        nats_client = await PolyNats.connect(nats_url)
-        try:
-            count = await replay_nats(args.dsn, nats_client)
-            print(f"[backfill] replayed {count} signals to NATS")
-        finally:
-            await nats_client.close()
-        return
-
     nats_client = None
-    if not args.no_nats:
+    if not args.db_only:
+        nats_url = os.getenv("NATS_URL", "nats://nats:4222")
         nats_client = await PolyNats.connect(nats_url)
     try:
         backfiller = MarketBackfiller(db_dsn=args.dsn, nats_client=nats_client)
-        result = await backfiller.run(limit=args.limit, emit_nats=not args.no_nats)
+        result = await backfiller.run(limit=args.limit, emit_nats=not args.db_only)
         print(f"[backfill] {result}")
     finally:
         if nats_client:
