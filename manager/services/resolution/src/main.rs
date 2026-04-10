@@ -37,10 +37,16 @@ async fn main() -> anyhow::Result<()> {
         .connect(&settings.database_url)
         .await
         .context("failed to connect to postgres")?;
+    let consumer_db = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&settings.database_url)
+        .await
+        .context("failed to connect to postgres (consumer pool)")?;
     let nats = NatsClient::connect(&settings.nats_url).await?;
 
     let state = Arc::new(AppState {
         db: db.clone(),
+        consumer_db: consumer_db.clone(),
         nats: nats.clone(),
         gamma_base: settings.gamma_api_base.clone(),
         resolution_sweep_interval_seconds: settings.resolution_sweep_interval_seconds,

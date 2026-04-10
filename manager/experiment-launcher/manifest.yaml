@@ -1,11 +1,18 @@
 experiments:
-  - name: exp-follow-signal-sentiment
+  - name: exp-first-signal-sentiment
     config: /app/configs/follow_signal_sentiment.yaml
     module: strategies.signal_sentiment_follow
+    trigger_signal_kind: market_implied
 
-  - name: exp-against-signal-sentiment
+  - name: exp-last-signal-sentiment
+    config: /app/configs/last_signal_sentiment.yaml
+    module: strategies.signal_sentiment_follow
+    trigger_signal_kind: market_implied
+
+  - name: exp-control-against-first-sentiment
     config: /app/configs/against_signal_sentiment.yaml
     module: strategies.signal_sentiment_against
+    trigger_signal_kind: market_implied
 
   - name: exp-control-always-yes
     config: /app/configs/always_yes.yaml
@@ -25,12 +32,12 @@ experiments:
     module: strategies.probabilistic_control
     seeds: [21, 67, 420]
 
-  - name: exp-random
+  - name: exp-control-random
     config: /app/configs/default.yaml
     module: strategies.probabilistic_control
-    seeds: [1337]
+    seeds: [21, 67, 420]
 
-  - name: exp-control-pass-through
-    config: /app/configs/pass_through_control.yaml
-    module: strategies.pass_through_control
+  - name: exp-kmeans-clustering
+    config: /app/configs/kmeans_clustering.yaml
+    module: strategies.kmeans_clustering
 

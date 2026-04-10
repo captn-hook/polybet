@@ -1,70 +1,49 @@
-# Signal Workers v0.1
+# Signal Workers v0.2
 
 Signal workers convert upstream market/context data into standardized signal events for experiments.
 
 ## Goal in pipeline
 
-Signals make experiment inputs consistent: each signal emits `signal.computed.v1` with either:
-- `status=ok` with side/confidence, or
+Signals make experiment inputs consistent: each signal publishes to `signal.computed.v1.<kind>` with either:
+- `status=ok` with signal-specific fields, or
 - `status=unavailable` with explicit reason.
+
+NATS hierarchical subjects allow experiments to subscribe only to the signal kinds they need (e.g., `signal.computed.v1.market_implied`), while consumers that need all kinds use the wildcard `signal.computed.v1.*`.
 
 ## Implemented workers
 
-1. `signal/market_implied.py` (`market_implied`)
-   - consumes `market.new_question.v1`
-   - emits implied side/confidence from market `payload.outcomePrices`
-2. `signal/pass_through.py` (`pass_through`)
-   - consumes `market.new_question.v1`
-   - emits simple pass-through signal events for control/testing flows
-3. `signal/outcome_labels.py` (`outcome_labels`)
-   - consumes `market.new_question.v1`
-   - re-emits `payload.outcomes` as normalized labels metadata
-4. `signal/market_metadata.py` (`market_metadata`)
-   - consumes `market.new_question.v1`
-   - re-emits discovery metadata (event/condition/question IDs and market flags)
-5. `signal/clob_microstructure.py` (`clob_microstructure`)
-   - consumes `market.new_question.v1`
-   - fetches CLOB `/spread` and `/last-trade-price` by token ID and emits thin market microstructure fields
-6. `signal/open_interest.py` (`open_interest`)
-   - consumes `market.new_question.v1`
-   - fetches Data API `/oi?market=...` by condition ID and emits current open interest
+### Base signals (consume `market.new_question.v1`)
 
-Both use `common/python/polybet_nats.py`.
+1. `market_implied.py` — implied side/confidence from `outcomePrices`
+2. `market_metadata.py` — discovery metadata (event/condition/question IDs, flags)
+3. `outcome_labels.py` — normalized outcome labels from `outcomes`
+4. `question.py` — market question text
+5. `clob_microstructure.py` — CLOB API spread and last trade price
+6. `open_interest.py` — Data API open interest by condition ID
+7. `orderbook_depth.py` — CLOB API full order book
+8. `price_history.py` — CLOB API historical price series
+9. `trade_flow.py` — Data API recent trade activity
 
-## Runtime dependencies
+### Derived signals (consume parent signal from `signal.computed.v1.<parent_kind>`)
 
-- `NATS_URL`
-- `MARKET_NEW_QUESTION_TOPIC`
-- `SIGNAL_OUTPUT_TOPIC`
-- `CLOB_API_BASE` (for `clob_microstructure`)
-- `DATA_API_BASE` (for `open_interest`)
-- optional `OLLAMA_BASE_URL` (for future embedding/synthesis paths)
+10. `orderbook_depth_derived.py` — imbalance, weighted mid, slippage from order book
+11. `price_history_derived.py` — momentum, volatility, trend from price history
+12. `trade_flow_derived.py` — net flow, buy/sell ratio, VWAP from trade data
 
-## Event contract emitted
+All use `common/python/polybet_nats.py` and `signal_common.py`.
 
-`signal.computed.v1` payload includes:
-- `event_type`, `emitted_at`
-- `signal_id`, `signal_kind`
+## Event contract
+
+Published to `signal.computed.v1.<signal_kind>`:
+- `event_type`, `emitted_at`, `signal_id`, `signal_kind`
 - `market_id`, `market_question`
 - `status`, `reason`
-- when `status=ok`: `sentiment_side`, `sentiment_confidence` (+ sentiment metadata fields)
-
-Fatal runtime paths emit:
-- `signal.error.v1` with `service`, `error_code`, `message`, `context`.
+- signal-specific fields (e.g., `sentiment_side`, `sentiment_confidence`, `spread`, etc.)
 
 ## Configuration
 
-High-value env:
-- `SIGNAL_KIND`
-- `SIGNAL_ID`
-- `SIGNAL_OUTPUT_TOPIC`
-- `MARKET_NEW_QUESTION_TOPIC`
-- `NATS_URL`
-- `SIGNAL_POLL_INTERVAL_SEC`
-
-## Scaling guidance
-
-- Keep workers stateless.
-- Scale by source shard/topic partition.
-- Keep `signal_id` deterministic for traceability and replay analysis.
+- `SIGNAL_KIND` / `SIGNAL_ID` — identity
+- `SIGNAL_OUTPUT_TOPIC` — base topic (default: `signal.computed.v1`), kind is appended
+- `MARKET_NEW_QUESTION_TOPIC` — source topic (base signals: `market.new_question.v1`, derived: `signal.computed.v1.<parent>`)
+- `CLOB_API_BASE` / `DATA_API_BASE` — external API endpoints
 

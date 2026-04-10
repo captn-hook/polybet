@@ -5,7 +5,7 @@ const ROLE_GRANTS_SQL: &str = r#"
         DECLARE
             role_name TEXT;
         BEGIN
-            FOREACH role_name IN ARRAY ARRAY['polybet_input', 'polybet_resolution', 'polybet_observe']
+            FOREACH role_name IN ARRAY ARRAY['polybet_input', 'polybet_resolution', 'polybet_observe', 'polybet_experiment']
             LOOP
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
                     EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I', role_name);
@@ -48,14 +48,22 @@ const ROLE_GRANTS_SQL: &str = r#"
                     experiment_predictions,
                     market_outcomes,
                     market_tracking,
-                    error_events
+                    error_events,
+                    signal_outputs,
+                    gamma_markets
                 TO polybet_resolution';
                 EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE
                     experiment_predictions_id_seq,
-                    error_events_id_seq
+                    error_events_id_seq,
+                    signal_outputs_id_seq
                 TO polybet_resolution';
                 EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT, UPDATE, DELETE ON TABLES TO polybet_resolution';
                 EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO polybet_resolution';
+            END IF;
+
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'polybet_experiment') THEN
+                EXECUTE 'GRANT INSERT ON TABLE signal_outputs TO polybet_experiment';
+                EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE signal_outputs_id_seq TO polybet_experiment';
             END IF;
         END
         $$;
@@ -245,45 +253,48 @@ pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
-    sqlx::query("ALTER TABLE markets ADD COLUMN IF NOT EXISTS start_date_raw TEXT NULL")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE markets ADD COLUMN IF NOT EXISTS accepting_orders BOOLEAN NULL")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE markets ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT false")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE market_snapshots ADD COLUMN IF NOT EXISTS start_date_raw TEXT NULL")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE market_snapshots ADD COLUMN IF NOT EXISTS accepting_orders BOOLEAN NULL")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE market_snapshots ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT false")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE gamma_markets ADD COLUMN IF NOT EXISTS start_date_raw TEXT NULL")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE gamma_markets ADD COLUMN IF NOT EXISTS accepting_orders BOOLEAN NULL")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE gamma_markets ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT false")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE manager_sync_status ADD COLUMN IF NOT EXISTS eligible_markets BIGINT NOT NULL DEFAULT 0")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE manager_sync_status ADD COLUMN IF NOT EXISTS zero_eligible_streak BIGINT NOT NULL DEFAULT 0")
-        .execute(pool)
-        .await?;
+    // Column migrations — only run ALTERs if columns are actually missing.
+    // This avoids taking AccessExclusiveLock on every startup.
+    let needs_migration = sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'markets' AND column_name = 'is_eligible')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+
+    if needs_migration {
+        for ddl in [
+            "ALTER TABLE markets ADD COLUMN IF NOT EXISTS start_date_raw TEXT NULL",
+            "ALTER TABLE markets ADD COLUMN IF NOT EXISTS accepting_orders BOOLEAN NULL",
+            "ALTER TABLE markets ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT false",
+            "ALTER TABLE market_snapshots ADD COLUMN IF NOT EXISTS start_date_raw TEXT NULL",
+            "ALTER TABLE market_snapshots ADD COLUMN IF NOT EXISTS accepting_orders BOOLEAN NULL",
+            "ALTER TABLE market_snapshots ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT false",
+            "ALTER TABLE gamma_markets ADD COLUMN IF NOT EXISTS start_date_raw TEXT NULL",
+            "ALTER TABLE gamma_markets ADD COLUMN IF NOT EXISTS accepting_orders BOOLEAN NULL",
+            "ALTER TABLE gamma_markets ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT false",
+            "ALTER TABLE manager_sync_status ADD COLUMN IF NOT EXISTS eligible_markets BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE manager_sync_status ADD COLUMN IF NOT EXISTS zero_eligible_streak BIGINT NOT NULL DEFAULT 0",
+        ] {
+            sqlx::query(ddl).execute(pool).await.ok();
+        }
+    }
 
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_markets_eligible_updated_at
         ON markets (updated_at DESC)
         WHERE is_eligible = true;
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_markets_open_active
+        ON markets (end_date_raw)
+        WHERE active = true AND closed = false AND end_date_raw IS NOT NULL;
         "#,
     )
     .execute(pool)
@@ -384,11 +395,54 @@ pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
             signal_kind TEXT NOT NULL,
             market_id TEXT NOT NULL,
             market_question TEXT NULL,
-            sentiment_side TEXT NOT NULL,
-            sentiment_confidence DOUBLE PRECISION NOT NULL,
+            sentiment_side TEXT NULL,
+            sentiment_confidence DOUBLE PRECISION NULL,
             meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Migrations for existing signal_outputs tables — skip if already nullable
+    let so_needs_migration = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'signal_outputs' AND column_name = 'sentiment_side' AND is_nullable = 'NO')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if so_needs_migration {
+        sqlx::query("ALTER TABLE signal_outputs ALTER COLUMN sentiment_side DROP NOT NULL")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE signal_outputs ALTER COLUMN sentiment_confidence DROP NOT NULL")
+            .execute(pool).await.ok();
+    }
+    let so_needs_payload = sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'signal_outputs' AND column_name = 'payload_json')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if so_needs_payload {
+        sqlx::query("ALTER TABLE signal_outputs ADD COLUMN IF NOT EXISTS payload_json JSONB NOT NULL DEFAULT '{}'::jsonb")
+            .execute(pool).await?;
+    }
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_signal_outputs_market_kind
+        ON signal_outputs (market_id, signal_kind);
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_signal_outputs_created_at
+        ON signal_outputs (created_at DESC);
         "#,
     )
     .execute(pool)

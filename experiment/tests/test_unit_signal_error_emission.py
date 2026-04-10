@@ -13,7 +13,7 @@ if str(SIGNAL_DIR) not in sys.path:
 
 sys.modules.setdefault("polybet_nats", SimpleNamespace(PolyNats=object))
 import market_implied as signal_main
-import pass_through as signal_pass_through
+import question as signal_question
 import signal_common
 
 
@@ -59,7 +59,7 @@ def test_signal_market_implied_emits_signal_error_contract(monkeypatch) -> None:
     assert isinstance(payload["emitted_at"], str)
 
 
-def test_signal_pass_through_emits_signal_error_contract(monkeypatch) -> None:
+def test_signal_question_emits_signal_error_contract(monkeypatch) -> None:
     fake = _FakeNats()
 
     async def _fake_connect(url: str) -> _FakeNats:
@@ -69,7 +69,7 @@ def test_signal_pass_through_emits_signal_error_contract(monkeypatch) -> None:
     monkeypatch.setattr(signal_common, "PolyNats", SimpleNamespace(connect=_fake_connect))
 
     asyncio.run(
-        signal_pass_through._emit_signal_error(
+        signal_question._emit_signal_error(
             "nats://unit-test:4222",
             "signal.runtime.crash",
             "boom",
@@ -82,7 +82,7 @@ def test_signal_pass_through_emits_signal_error_contract(monkeypatch) -> None:
     subject, payload = fake.calls[0]
     assert subject == "signal.error.v1"
     assert payload["event_type"] == "signal.error.v1"
-    assert payload["service"] == "signal_pass_through"
+    assert payload["service"] == "signal_question"
     assert payload["error_code"] == "signal.runtime.crash"
     assert payload["message"] == "boom"
     assert payload["context"] == {"k": "v"}

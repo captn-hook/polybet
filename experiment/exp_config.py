@@ -50,7 +50,11 @@ def read_runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
         cfg=cfg,
         config_path=config_path,
-        experiment_id=str(exp_cfg.get("id", "exp-random")),
+        experiment_id=(
+            f"{exp_cfg.get('id', 'exp-random')}_{env_seed}"
+            if env_seed
+            else str(exp_cfg.get("id", "exp-random"))
+        ),
         strategy=str(exp_cfg.get("name", "random-baseline")),
         loop_interval_seconds=int(random_cfg.get("loop_interval_seconds", 30)),
         horizon_minutes=int(random_cfg.get("horizon_minutes", 5)),

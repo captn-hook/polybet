@@ -31,6 +31,19 @@ struct PredictionProposedEvent {
     meta: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SignalComputedEvent {
+    signal_id: Option<String>,
+    signal_kind: Option<String>,
+    market_id: Option<String>,
+    market_question: Option<String>,
+    status: Option<String>,
+    sentiment_side: Option<String>,
+    sentiment_confidence: Option<f64>,
+    #[serde(flatten)]
+    full_payload: Value,
+}
+
 #[derive(Debug, Serialize)]
 struct ResolutionErrorEvent<'a> {
     event_type: &'a str,
@@ -67,6 +80,13 @@ pub fn start_resolution_loop(state: Arc<AppState>) {
             }
         });
 
+        let signal_state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) = consume_signals(signal_state).await {
+                error!(error = %err, "signal consumer failed");
+            }
+        });
+
         let scheduler_state = state.clone();
         tokio::spawn(async move {
             if let Err(err) = run_resolution_scheduler(scheduler_state).await {
@@ -94,6 +114,7 @@ async fn wait_for_required_tables(state: &AppState) -> anyhow::Result<()> {
         "market_tracking",
         "experiment_predictions",
         "error_events",
+        "signal_outputs",
     ];
     let mut attempts = 0_u32;
     loop {
@@ -163,11 +184,18 @@ async fn run_resolution_sweep(state: &Arc<AppState>, client: &Client) -> anyhow:
 
     for market in due_markets {
         let market_id = market.market_id.clone();
-        let payload = if let Some(payload) = market.payload_json {
-            payload
+        let payload = if market.retry_count == 0 {
+            if let Some(payload) = market.payload_json {
+                payload
+            } else {
+                fetch_and_refresh_market(state, client, &market_id).await?;
+                refresh_payload_from_db(state, &market_id).await?.unwrap_or_else(|| json!({}))
+            }
         } else {
             fetch_and_refresh_market(state, client, &market_id).await?;
-            refresh_payload_from_db(state, &market_id).await?.unwrap_or_else(|| json!({}))
+            refresh_payload_from_db(state, &market_id).await?
+                .or(market.payload_json)
+                .unwrap_or_else(|| json!({}))
         };
 
         let closed = market.closed.unwrap_or_else(|| {
@@ -180,6 +208,11 @@ async fn run_resolution_sweep(state: &Arc<AppState>, client: &Client) -> anyhow:
         if let Some((resolution_status, winning_side, resolved_at, payload_json)) =
             derive_market_outcome(&payload, closed)
         {
+            // Emit last-snapshot market_implied signal before recording resolution
+            if let Err(err) = emit_last_snapshot_signal(state, &market_id, &payload).await {
+                tracing::warn!(error = %err, market_id = %market_id, "failed to emit last-snapshot signal");
+            }
+
             sqlx::query(
                 r#"
                 INSERT INTO market_outcomes (
@@ -293,7 +326,7 @@ async fn fetch_due_markets(state: &Arc<AppState>) -> anyhow::Result<Vec<DueMarke
         FROM market_tracking mt
         LEFT JOIN gamma_markets gm ON gm.market_id = mt.market_id
         WHERE mt.next_check_at IS NULL OR mt.next_check_at <= now()
-        ORDER BY COALESCE(mt.next_check_at, mt.first_seen_at) ASC
+        ORDER BY mt.retry_count ASC, COALESCE(mt.next_check_at, mt.first_seen_at) ASC
         LIMIT $1
         "#,
     )
@@ -474,6 +507,57 @@ fn extract_resolved_at(raw: &Value) -> Option<DateTime<Utc>> {
     None
 }
 
+async fn emit_last_snapshot_signal(state: &AppState, market_id: &str, payload: &Value) -> anyhow::Result<()> {
+    let prices = payload
+        .get("outcomePrices")
+        .and_then(Value::as_array)
+        .or_else(|| payload.get("outcome_prices").and_then(Value::as_array));
+    let prices = match prices {
+        Some(p) if p.len() >= 2 => p,
+        _ => return Ok(()),
+    };
+    let parse = |v: &Value| -> Option<f64> {
+        v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    };
+    let yes_p = match parse(&prices[0]) {
+        Some(p) if p.is_finite() => p,
+        _ => return Ok(()),
+    };
+    let no_p = match parse(&prices[1]) {
+        Some(p) if p.is_finite() => p,
+        _ => return Ok(()),
+    };
+    let total = yes_p + no_p;
+    if total <= 0.0 {
+        return Ok(());
+    }
+    let yes_share = yes_p / total;
+    let no_share = no_p / total;
+    let side = if yes_p >= no_p { "YES" } else { "NO" };
+    let confidence = yes_share.max(no_share);
+    let question = payload.get("question").and_then(Value::as_str).unwrap_or("");
+
+    let signal = json!({
+        "event_type": "signal.computed.v1",
+        "emitted_at": Utc::now().to_rfc3339(),
+        "signal_id": "resolution-market-implied",
+        "signal_kind": "market_implied",
+        "market_id": market_id,
+        "market_question": question,
+        "status": "ok",
+        "reason": "last_snapshot",
+        "sentiment_side": side,
+        "sentiment_confidence": confidence,
+        "yes_probability": yes_p,
+        "no_probability": no_p,
+        "yes_share": yes_share,
+        "no_share": no_share,
+        "margin": (yes_share - no_share).abs(),
+    });
+    state.nats.publish_json("signal.computed.v1.market_implied", &signal).await?;
+    Ok(())
+}
+
 fn infer_winning_side(raw: &Value) -> Option<String> {
     let outcomes = raw.get("outcomes").and_then(Value::as_array)?;
     let prices = raw
@@ -648,7 +732,72 @@ async fn record_prediction(state: &AppState, e: &PredictionProposedEvent) -> any
     .bind(e.horizon_minutes)
     .bind(&e.rationale)
     .bind(&meta)
-    .execute(&state.db)
+    .execute(&state.consumer_db)
+    .await?;
+
+    Ok(())
+}
+
+async fn consume_signals(state: Arc<AppState>) -> anyhow::Result<()> {
+    let mut sub = state.nats.subscribe("signal.computed.v1.*").await?;
+    while let Some(msg) = sub.next().await {
+        let payload: SignalComputedEvent = match state.nats.decode_json(&msg) {
+            Ok(v) => v,
+            Err(err) => {
+                publish_resolution_error(
+                    &state,
+                    "signal_decode",
+                    err.to_string(),
+                    json!({"subject":"signal.computed.v1"}),
+                )
+                .await?;
+                continue;
+            }
+        };
+
+        let status = payload.status.as_deref().unwrap_or("");
+        if status != "ok" {
+            continue;
+        }
+
+        if let Err(err) = record_signal(&state, &payload).await {
+            publish_resolution_error(
+                &state,
+                "signal_record",
+                err.to_string(),
+                json!({"market_id": payload.market_id, "signal_kind": payload.signal_kind}),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn record_signal(state: &AppState, e: &SignalComputedEvent) -> anyhow::Result<()> {
+    let signal_id = e.signal_id.as_deref().unwrap_or("unknown");
+    let signal_kind = e.signal_kind.as_deref().unwrap_or("unknown");
+    let market_id = e.market_id.as_deref().unwrap_or("");
+    if market_id.is_empty() {
+        anyhow::bail!("missing market_id in signal.computed.v1");
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO signal_outputs (
+            signal_id, signal_kind, market_id, market_question,
+            sentiment_side, sentiment_confidence, payload_json
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        "#,
+    )
+    .bind(signal_id)
+    .bind(signal_kind)
+    .bind(market_id)
+    .bind(&e.market_question)
+    .bind(&e.sentiment_side)
+    .bind(e.sentiment_confidence)
+    .bind(&e.full_payload)
+    .execute(&state.consumer_db)
     .await?;
 
     Ok(())
@@ -773,7 +922,7 @@ async fn store_error_event(
     .bind(source_subject)
     .bind(raw_payload_json)
     .bind(occurred_at)
-    .execute(&state.db)
+    .execute(&state.consumer_db)
     .await?;
     Ok(())
 }

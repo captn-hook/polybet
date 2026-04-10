@@ -136,9 +136,9 @@ pub async fn status(
     .await
     .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let latest_signal = sqlx::query_as::<_, (String, String, f64, Option<DateTime<Utc>>)>(
+    let latest_signal = sqlx::query_as::<_, (String, String, Option<DateTime<Utc>>)>(
         r#"
-        SELECT sentiment_side, market_id, sentiment_confidence, created_at
+        SELECT signal_kind, market_id, created_at
         FROM signal_outputs
         ORDER BY created_at DESC
         LIMIT 1
@@ -215,11 +215,10 @@ pub async fn status(
     ) = counts;
 
     let latest_signal_json = latest_signal
-        .map(|(side, market_id, confidence, created_at)| {
+        .map(|(signal_kind, market_id, created_at)| {
             json!({
-                "side": side,
+                "signal_kind": signal_kind,
                 "market_id": market_id,
-                "confidence": confidence,
                 "created_at": created_at,
                 "age_seconds": to_age(created_at),
             })
@@ -434,9 +433,9 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
     .unwrap_or((0, None));
 
     let latest_signal =
-        sqlx::query_as::<_, (String, String, f64, Option<DateTime<Utc>>)>(
+        sqlx::query_as::<_, (String, String, Option<DateTime<Utc>>)>(
             r#"
-        SELECT sentiment_side, market_id, sentiment_confidence, created_at
+        SELECT signal_kind, market_id, created_at
         FROM signal_outputs
         ORDER BY created_at DESC
         LIMIT 1
@@ -446,9 +445,9 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         .await
         .unwrap_or(None);
 
-    let recent_signals = sqlx::query_as::<_, (String, String, String, f64, Option<DateTime<Utc>>)>(
+    let recent_signals = sqlx::query_as::<_, (String, String, String, Option<DateTime<Utc>>)>(
             r#"
-        SELECT signal_id, market_id, sentiment_side, sentiment_confidence, created_at
+        SELECT signal_id, market_id, signal_kind, created_at
         FROM signal_outputs
         ORDER BY created_at DESC
         LIMIT 300
@@ -544,7 +543,6 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         LEFT JOIN market_outcomes mo ON mo.market_id = r.market_id
         WHERE r.rn = 1
         ORDER BY r.created_at DESC
-        LIMIT 500
         "#,
     )
     .fetch_all(&state.db)
@@ -775,26 +773,23 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
     }
 
     let mut signal_rows = String::new();
-    let mut seen_signal_keys: HashSet<(String, String, String, String)> = HashSet::new();
+    let mut seen_signal_keys: HashSet<(String, String, String)> = HashSet::new();
     let mut rendered_signal_rows = 0usize;
-    for (signal_id, market_id, side, confidence, created_at) in recent_signals {
+    for (signal_id, market_id, signal_kind, created_at) in recent_signals {
         let key = (
             signal_id.clone(),
             market_id.clone(),
-            side.clone(),
-            format!("{confidence:.4}"),
+            signal_kind.clone(),
         );
         if seen_signal_keys.contains(&key) {
             continue;
         }
         seen_signal_keys.insert(key);
         signal_rows.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{:.4}</td><td>{}</td></tr>",
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             html_escape(&signal_id),
             html_escape(&market_id),
-            status_class(&side),
-            html_escape(&side),
-            confidence,
+            html_escape(&signal_kind),
             created_at
                 .map(|ts| ts.to_rfc3339())
                 .unwrap_or_else(|| "-".to_string()),
@@ -885,9 +880,9 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         ));
     }
 
-    let (latest_signal_side, latest_signal_market, latest_signal_conf, latest_signal_at) = latest_signal
-        .map(|(side, market, conf, ts)| (side, market, conf, ts))
-        .unwrap_or_else(|| ("-".to_string(), "-".to_string(), 0.0, None));
+    let (latest_signal_kind, latest_signal_market, latest_signal_at) = latest_signal
+        .map(|(kind, market, ts)| (kind, market, ts))
+        .unwrap_or_else(|| ("-".to_string(), "-".to_string(), None));
 
     let (last_success, markets_synced, eligible_markets, zero_eligible_streak, events_synced, last_error) =
         sync_row.unwrap_or((None, 0, 0, 0, 0, None));
@@ -1070,7 +1065,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         <div class="card"><strong>Zero Eligible Streak</strong><div id="s-sync-zero-eligible-streak">{}</div></div>
         <div class="card"><strong>Last Sync Events</strong><div id="s-sync-events-synced">{}</div></div>
         <div class="card"><strong>Last Success</strong><div id="s-sync-last-success">{}</div></div>
-        <div class="card"><strong>Latest Signal Side</strong><div>{}</div></div>
+        <div class="card"><strong>Latest Signal Kind</strong><div>{}</div></div>
         <div class="card"><strong>Latest Signal Market</strong><div>{}</div></div>
       </div>
       <p><strong>Sync Error:</strong> <span id="s-sync-last-error">{}</span></p>
@@ -1095,17 +1090,16 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
     </details>
 
     <details class="section" data-section-id="signal-feed">
-      <summary>Signal Feed (polymarket_sentiment)</summary>
+      <summary>Signal Feed</summary>
       <div class="cards">
-        <div class="card"><strong>Latest Side</strong><div><span class="pill {}">{}</span></div></div>
-        <div class="card"><strong>Latest Confidence</strong><div>{:.4}</div></div>
+        <div class="card"><strong>Latest Kind</strong><div>{}</div></div>
         <div class="card"><strong>Latest Market ID</strong><div>{}</div></div>
         <div class="card"><strong>Latest Signal Time</strong><div>{}</div></div>
         <div class="card"><strong>Signals Written</strong><div>{}</div></div>
       </div>
       <table id="tbl-signals">
         <thead>
-          <tr><th>Signal ID</th><th>Market ID</th><th>Side</th><th>Confidence</th><th>Created</th></tr>
+          <tr><th>Signal ID</th><th>Market ID</th><th>Signal Kind</th><th>Created</th></tr>
         </thead>
         <tbody>{}</tbody>
       </table>
@@ -1212,8 +1206,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
         zero_eligible_streak,
         events_synced,
         last_success.map(|ts| ts.to_rfc3339()).unwrap_or_else(|| "never".to_string()),
-        status_class(&latest_signal_side),
-        html_escape(&latest_signal_side),
+        html_escape(&latest_signal_kind),
         html_escape(&latest_signal_market),
         html_escape(last_error.as_deref().unwrap_or("none")),
         desired_instances,
@@ -1225,8 +1218,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Result<Html<String
             .unwrap_or_else(|| "never".to_string()),
         html_escape(launcher_error.as_deref().unwrap_or("none")),
         launcher_rows,
-        html_escape(&latest_signal_side),
-        latest_signal_conf,
+        html_escape(&latest_signal_kind),
         html_escape(&latest_signal_market),
         latest_signal_at
             .map(|ts| ts.to_rfc3339())

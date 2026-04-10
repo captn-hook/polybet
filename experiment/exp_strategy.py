@@ -11,7 +11,7 @@ def decide_side(
     yes_probability: float,
     rng: random.Random,
     signal_market: dict[str, Any] | None = None,
-) -> tuple[str, float]:
+) -> tuple[str, float] | None:
     mode = normalized_strategy_mode(strategy_mode)
     if mode == "always_yes":
         return "YES", 1.0
@@ -19,18 +19,18 @@ def decide_side(
         return "NO", 1.0
     if mode == "follow_signal_sentiment":
         if signal_market is None:
-            raise RuntimeError("No signal payload available for follow_signal_sentiment.")
+            return None
         side = str(signal_market["signal_side"]).upper()
         if side not in {"YES", "NO"}:
-            raise RuntimeError(f"Invalid signal side: {side}")
+            return None
         confidence = float(signal_market.get("signal_confidence", 0.5))
         return side, round(max(0.0, min(1.0, confidence)), 4)
     if mode == "against_signal_sentiment":
         if signal_market is None:
-            raise RuntimeError("No signal payload available for against_signal_sentiment.")
+            return None
         signal_side = str(signal_market["signal_side"]).upper()
         if signal_side not in {"YES", "NO"}:
-            raise RuntimeError(f"Invalid signal side: {signal_side}")
+            return None
         side = "NO" if signal_side == "YES" else "YES"
         confidence = float(signal_market.get("signal_confidence", 0.5))
         return side, round(max(0.0, min(1.0, confidence)), 4)

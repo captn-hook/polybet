@@ -22,6 +22,8 @@ struct ExperimentSpec {
     module: Option<String>,
     #[serde(default)]
     seeds: Option<Vec<i64>>,
+    #[serde(default)]
+    trigger_signal_kind: Option<String>,
 }
 
 #[derive(Clone)]
@@ -31,6 +33,7 @@ struct DesiredInstance {
     seed: Option<i64>,
     config_path: String,
     module: Option<String>,
+    trigger_signal_kind: Option<String>,
 }
 
 struct ExistingContainer {
@@ -102,6 +105,7 @@ pub async fn reconcile_launcher(state: &AppState) -> anyhow::Result<LaunchResult
                 seed: None,
                 config_path: exp.config.clone(),
                 module: exp.module.clone(),
+                trigger_signal_kind: exp.trigger_signal_kind.clone(),
             });
         } else {
             for seed in seeds {
@@ -111,6 +115,7 @@ pub async fn reconcile_launcher(state: &AppState) -> anyhow::Result<LaunchResult
                     seed: Some(seed),
                     config_path: exp.config.clone(),
                     module: exp.module.clone(),
+                    trigger_signal_kind: exp.trigger_signal_kind.clone(),
                 });
             }
         }
@@ -245,6 +250,10 @@ async fn create_and_start_container(
     if let Some(module) = &inst.module {
         env.push(format!("EXPERIMENT_MODULE={module}"));
     }
+    if let Some(kind) = &inst.trigger_signal_kind {
+        env.push(format!("TRIGGER_SIGNAL_KIND={kind}"));
+    }
+    env.push("DATABASE_URL=postgresql://polybet_experiment:polybet_experiment_dev_password@postgres:5432/polybet".to_string());
 
     let req = DockerCreateReq {
         image: experiment_image.to_string(),

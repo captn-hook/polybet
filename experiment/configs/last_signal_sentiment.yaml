@@ -1,10 +1,10 @@
 version: v1
 
 experiment:
-  id: exp-control-against-first-sentiment
-  name: control-against-first-sentiment
+  id: exp-last-signal-sentiment
+  name: last-signal-sentiment
   mode: paper
-  tags: [signal, polymarket, sentiment, against, control]
+  tags: [signal, polymarket, sentiment, last]
 
 model:
   family: control_baseline
@@ -35,8 +35,8 @@ outputs:
   include_feature_snapshot: false
 
 random_baseline:
-  strategy_mode: against_signal_sentiment
+  strategy_mode: follow_signal_sentiment
   yes_probability: 0.5
   max_minutes_to_end: 120
   horizon_minutes: 5
-  loop_interval_seconds: 30
+  loop_interval_seconds: 0

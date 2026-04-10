@@ -15,16 +15,12 @@ def test_probabilistic_strategy_is_deterministic_for_fixed_seed() -> None:
     assert seq_a == seq_b
 
 
-def test_follow_signal_sentiment_rejects_invalid_side() -> None:
+def test_follow_signal_sentiment_skips_invalid_side() -> None:
     rng = random.Random(1)
-    try:
-        decide_side(
-            "follow_signal_sentiment",
-            0.5,
-            rng,
-            signal_market={"signal_side": "MAYBE", "signal_confidence": 0.8},
-        )
-    except RuntimeError as exc:
-        assert "Invalid signal side" in str(exc)
-    else:
-        raise AssertionError("Expected RuntimeError for invalid signal side")
+    result = decide_side(
+        "follow_signal_sentiment",
+        0.5,
+        rng,
+        signal_market={"signal_side": "MAYBE", "signal_confidence": 0.8},
+    )
+    assert result is None

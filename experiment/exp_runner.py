@@ -21,9 +21,10 @@ async def run_async() -> None:
     runtime = read_runtime_config()
     rng = random.Random(runtime.seed if runtime.seed is not None else 0)
     nats_url = os.getenv("NATS_URL", "nats://nats:4222")
-    input_signal_topic = os.getenv("EXPERIMENT_SIGNAL_TOPIC", "signal.computed.v1")
+    signal_base_topic = os.getenv("EXPERIMENT_SIGNAL_TOPIC", "signal.computed.v1")
     prediction_topic = os.getenv("PREDICTION_OUTPUT_TOPIC", "prediction.proposed.v1")
-    pass_through_signal_kind = os.getenv("PASS_THROUGH_SIGNAL_KIND", "pass_through")
+    trigger_signal_kind = os.getenv("TRIGGER_SIGNAL_KIND", "question")
+    input_signal_topic = f"{signal_base_topic}.{trigger_signal_kind}"
     market_new_question_topic = os.getenv("MARKET_NEW_QUESTION_TOPIC", "market.new_question.v1")
     nats_client = await PolyNats.connect(nats_url)
     subscription = await nats_client.subscribe(input_signal_topic)
@@ -34,43 +35,51 @@ async def run_async() -> None:
         f"p_yes={runtime.yes_probability}, seed={runtime.seed}, "
         f"signal_topic={input_signal_topic}, market_topic={market_new_question_topic}, prediction_topic={prediction_topic}"
     )
+
     latest_market_by_id: dict[str, dict[str, object | None]] = {}
     latest_signal_by_market: dict[str, dict[str, object | None]] = {}
     run_id = f"{runtime.experiment_id}:{runtime.seed}" if runtime.seed else runtime.experiment_id
+    last_prediction_at: dict[str, float] = {}
 
+    market_drain_interval = 0
     while True:
-        try:
-            market_msg = await market_subscription.next_msg(timeout=1)
-            market_event = PolyNats.decode_json(market_msg)
-            market_id = str(market_event.get("market_id") or "").strip()
-            if market_id:
-                latest_market_by_id[market_id] = {
-                    "market_id": market_id,
-                    "question": market_event.get("question"),
-                    "end_date_raw": market_event.get("end_date_raw"),
-                }
-        except TimeoutError:
-            pass
+        # Drain market metadata periodically (every 50 signals, not every iteration)
+        market_drain_interval += 1
+        if market_drain_interval >= 50:
+            market_drain_interval = 0
+            try:
+                while True:
+                    market_msg = await market_subscription.next_msg(timeout=0.001)
+                    market_event = PolyNats.decode_json(market_msg)
+                    mid = str(market_event.get("market_id") or "").strip()
+                    if mid:
+                        latest_market_by_id[mid] = {
+                            "market_id": mid,
+                            "question": market_event.get("question"),
+                            "end_date_raw": market_event.get("end_date_raw"),
+                        }
+            except TimeoutError:
+                pass
 
         try:
             msg = await subscription.next_msg(timeout=1)
         except TimeoutError:
-            await asyncio.sleep(0.1)
+            market_drain_interval = 50  # force drain on next idle
             continue
 
         event = PolyNats.decode_json(msg)
-        if str(event.get("event_type")) != "signal.computed.v1":
-            continue
         if str(event.get("status")) not in {"ok", "unavailable"}:
             continue
         market_id = str(event.get("market_id") or "").strip()
         if not market_id:
             continue
-        if (
-            runtime.strategy_mode_normalized == "pass_through"
-            and str(event.get("signal_kind") or "") != pass_through_signal_kind
-        ):
-            continue
+
+        # Per-market cooldown
+        now = time.monotonic()
+        if runtime.loop_interval_seconds > 0:
+            last = last_prediction_at.get(market_id, 0)
+            if now - last < runtime.loop_interval_seconds:
+                continue
 
         latest_signal_by_market[market_id] = {
             "market_id": market_id,
@@ -87,12 +96,15 @@ async def run_async() -> None:
         }
         signal_market = latest_signal_by_market.get(market_id)
 
-        side, confidence = decide_side(
+        result = decide_side(
             runtime.strategy_mode,
             runtime.yes_probability,
             rng,
             signal_market,
         )
+        if result is None:
+            continue
+        side, confidence = result
         rationale = f"Control strategy '{runtime.strategy_mode}' generated this prediction."
         await nats_client.publish_json(
             prediction_topic,
@@ -117,11 +129,10 @@ async def run_async() -> None:
             },
         )
 
+        last_prediction_at[market_id] = time.monotonic()
         print(
             f"[experiment] proposed prediction market_id={market['market_id']} side={side} confidence={confidence}"
         )
-        if runtime.loop_interval_seconds > 0:
-            time.sleep(runtime.loop_interval_seconds)
 
 
 async def _emit_prediction_error(nats_url: str, error_code: str, message: str, context: dict[str, Any]) -> None:

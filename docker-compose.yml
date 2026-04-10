@@ -236,15 +236,15 @@ services:
     <<: *signal-base
     command: ["python", "market_implied.py"]
 
-  signal_pass_through:
+  signal_question:
     <<: *signal-base
     environment:
       <<: *worker-env
-      SIGNAL_KIND: ${PASS_THROUGH_SIGNAL_KIND:-pass_through}
-      SIGNAL_ID: ${PASS_THROUGH_SIGNAL_ID:-signal-pass-through}
+      SIGNAL_KIND: ${QUESTION_SIGNAL_KIND:-question}
+      SIGNAL_ID: ${QUESTION_SIGNAL_ID:-signal-question}
       SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
       MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
-    command: ["python", "pass_through.py"]
+    command: ["python", "question.py"]
 
   signal_outcome_labels:
     <<: *signal-base
@@ -287,6 +287,69 @@ services:
       MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
       DATA_API_BASE: ${DATA_API_BASE:-https://data-api.polymarket.com}
     command: ["python", "open_interest.py"]
+
+  signal_orderbook_depth:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${ORDERBOOK_DEPTH_SIGNAL_KIND:-orderbook_depth}
+      SIGNAL_ID: ${ORDERBOOK_DEPTH_SIGNAL_ID:-signal-orderbook-depth}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+      CLOB_API_BASE: ${CLOB_API_BASE:-https://clob.polymarket.com}
+    command: ["python", "orderbook_depth.py"]
+
+  signal_orderbook_depth_derived:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${ORDERBOOK_DEPTH_DERIVED_SIGNAL_KIND:-orderbook_depth_derived}
+      SIGNAL_ID: ${ORDERBOOK_DEPTH_DERIVED_SIGNAL_ID:-signal-orderbook-depth-derived}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}.orderbook_depth
+    command: ["python", "orderbook_depth_derived.py"]
+
+  signal_price_history:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${PRICE_HISTORY_SIGNAL_KIND:-price_history}
+      SIGNAL_ID: ${PRICE_HISTORY_SIGNAL_ID:-signal-price-history}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+      CLOB_API_BASE: ${CLOB_API_BASE:-https://clob.polymarket.com}
+    command: ["python", "price_history.py"]
+
+  signal_price_history_derived:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${PRICE_HISTORY_DERIVED_SIGNAL_KIND:-price_history_derived}
+      SIGNAL_ID: ${PRICE_HISTORY_DERIVED_SIGNAL_ID:-signal-price-history-derived}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}.price_history
+    command: ["python", "price_history_derived.py"]
+
+  signal_trade_flow:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${TRADE_FLOW_SIGNAL_KIND:-trade_flow}
+      SIGNAL_ID: ${TRADE_FLOW_SIGNAL_ID:-signal-trade-flow}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+      DATA_API_BASE: ${DATA_API_BASE:-https://data-api.polymarket.com}
+    command: ["python", "trade_flow.py"]
+
+  signal_trade_flow_derived:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: ${TRADE_FLOW_DERIVED_SIGNAL_KIND:-trade_flow_derived}
+      SIGNAL_ID: ${TRADE_FLOW_DERIVED_SIGNAL_ID:-signal-trade-flow-derived}
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}.trade_flow
+    command: ["python", "trade_flow_derived.py"]
 
 networks:
   polybet_net:

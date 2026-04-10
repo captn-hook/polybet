@@ -39,11 +39,7 @@ def _build_market_metadata(event: dict[str, object]) -> tuple[dict[str, object] 
         },
     }
 
-    return {
-        "sentiment_side": "YES",
-        "sentiment_confidence": 0.5,
-        **metadata,
-    }, "ok"
+    return metadata, "ok"
 
 
 def main() -> None:

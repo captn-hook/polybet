@@ -1,4 +1,4 @@
-# Experiment Workers v0.1 (Python)
+# Experiment Workers v0.2 (Python)
 
 Experiment workers consume standardized signals and emit prediction proposals used for scoring and comparison.
 
@@ -6,84 +6,70 @@ Experiment workers consume standardized signals and emit prediction proposals us
 
 Experiments are the model/strategy layer: many configurations run in parallel against the same eligible market and signal surfaces so outputs can be compared safely.
 
-## Worker behavior
+## Runners
 
-Current runner: `experiment/exp_runner.py`
+### exp_runner.py (strategy-based experiments)
 
-1. reads config from `EXPERIMENT_CONFIG_PATH`
-2. subscribes to:
-   - `market.new_question.v1`
-   - `signal.computed.v1`
-3. computes side/confidence from configured strategy mode
-4. emits `prediction.proposed.v1`
+1. Reads config from `EXPERIMENT_CONFIG_PATH`
+2. Subscribes to `signal.computed.v1.<trigger_signal_kind>` (targeted — no client-side filtering)
+3. Subscribes to `market.new_question.v1` for market metadata
+4. Computes side/confidence from configured strategy mode
+5. Per-market cooldown prevents duplicate predictions
+6. Emits `prediction.proposed.v1`
 
-Fatal runtime paths emit:
-- `prediction.error.v1` with structured context.
+### kmeans_runner.py (ML clustering experiment)
 
-## Implemented strategy modes
+1. Trains K-Means model from DB (`signal_outputs` + `market_outcomes`)
+2. Subscribes to `signal.computed.v1.*` (wildcard — all signal kinds)
+3. Accumulates signals per market, predicts when complete or on timeout (partial predict with NaN imputation)
+4. Refits model periodically on new resolutions (batched, non-blocking via thread pool)
+5. Emits `prediction.proposed.v1`
 
-- `always_yes`
-- `always_no`
-- `probabilistic` / `random`
-- `follow_signal_sentiment`
-- `against_signal_sentiment`
-- `pass_through`
+### backfill.py (historical signal generation)
 
-For RNG modes, `EXPERIMENT_SEED` is required for reproducibility.
+Generates signals from `gamma_markets` payload data for resolved markets. Uses pre-resolution snapshots from `market_snapshots` (earliest observation before market end time) to avoid data leakage.
 
-## Built-in configs
+Signal kinds generated: `market_implied`, `market_metadata`, `outcome_labels`, `question`, `clob_microstructure`, `orderbook_depth_derived`.
 
-- `configs/default.yaml`
-- `configs/always_yes.yaml`
-- `configs/always_no.yaml`
-- `configs/yes_75.yaml`
-- `configs/no_75.yaml`
-- `configs/follow_signal_sentiment.yaml`
-- `configs/against_signal_sentiment.yaml`
+```bash
+# Standalone DB + NATS backfill
+python backfill.py
+
+# Replay existing signals to NATS (no DB writes)
+python backfill.py --replay-nats
+
+# DB-only (no NATS)
+python backfill.py --no-nats
+```
+
+## Active experiments
+
+### Sentiment
+- `exp-first-signal-sentiment` — follows market_implied signal, per-market cooldown (predicts on first signal)
+- `exp-last-signal-sentiment` — follows market_implied signal, no cooldown (updates on latest signal including resolution-time emission)
+- `exp-control-against-first-sentiment` — bets against first signal (control)
+
+### ML
+- `exp-kmeans-clustering` — K-Means clustering on 30 signal features, partial predict on timeout
+
+### Controls
+- `exp-control-always-yes` / `exp-control-always-no` — fixed side
+- `exp-control-yes-75` / `exp-control-no-75` — 75% probabilistic (3 seeds: 21, 67, 420)
+- `exp-control-random` — 50/50 random (3 seeds: 21, 67, 420)
 
 ## Runtime dependencies
 
-- `NATS_URL`
-- `EXPERIMENT_SIGNAL_TOPIC`
-- `PREDICTION_OUTPUT_TOPIC`
-- `MARKET_NEW_QUESTION_TOPIC`
-- config file mount (`EXPERIMENT_CONFIG_PATH`)
-- optional `OLLAMA_BASE_URL` for future model paths
-
-## Event emitted
-
-`prediction.proposed.v1` includes:
-- `event_type`, `emitted_at`
-- `run_id`
-- `experiment_id`, `strategy`
-- `market_id`, `market_question`, `market_end_date_raw`
-- `side`, `confidence`
-- `horizon_minutes`, `rationale`, `meta`
-
-## Scaling guidance
-
-- Run many experiment replicas with distinct config/seed.
-- Keep configs externalized for replay and comparison.
-- Use deterministic naming and run metadata for lineage.
+- `NATS_URL`, `DATABASE_URL`
+- `EXPERIMENT_SIGNAL_TOPIC` — base topic (default: `signal.computed.v1`), runner appends `.<kind>` or `.*`
+- `TRIGGER_SIGNAL_KIND` — which signal kind triggers predictions (default: `question`)
+- `PREDICTION_OUTPUT_TOPIC`, `MARKET_NEW_QUESTION_TOPIC`
+- `EXPERIMENT_CONFIG_PATH` — config file path
+- `BACKFILL_ENABLED` — `1` (default) or `0` to skip DB backfill on startup
+- `EXPERIMENT_SEED` — required for RNG modes
 
 ## Tests
 
-Unit tests:
-
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests -m "not integration and not e2e"
-```
-
-Integration tests:
-
-```bash
-.\.venv\Scripts\python.exe -m pytest -q tests -m integration
-```
-
-E2E:
-
-```bash
-$env:POLYBET_RUN_E2E="1"
-.\.venv\Scripts\python.exe -m pytest -q tests\test_e2e_stack.py -m e2e
+docker run --rm polybet-experiment:local python -m pytest tests/ -v -k unit
 ```
 

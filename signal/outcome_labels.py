@@ -11,8 +11,6 @@ def _build_outcome_labels(event: dict[str, Any]) -> tuple[dict[str, Any] | None,
 
     normalized = [str(item) for item in outcomes]
     return {
-        "sentiment_side": "YES",
-        "sentiment_confidence": 0.5,
         "outcomes": normalized,
         "outcome_count": len(normalized),
         "meta": {

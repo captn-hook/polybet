@@ -1,4 +1,4 @@
-# Manager Workspace v0.1 (Rust)
+# Manager Workspace v0.2 (Rust)
 
 The manager workspace is the control plane for discovery, scoring, and observability.
 
@@ -23,11 +23,13 @@ Singleton services:
    - persists canonical/snapshot market data and gamma-derived market outcome updates
    - owns launcher reconcile loop and writes launcher state tables
 2. `resolution`
-   - consumes `prediction.proposed.v1`
-   - persists `experiment_predictions`
-   - emits and persists `resolution.error.v1`
+   - consumes `prediction.proposed.v1` and persists `experiment_predictions`
+   - consumes `signal.computed.v1.*` and persists `signal_outputs`
+   - runs resolution sweep: fetches fresh market data from Gamma API, derives outcomes, writes `market_outcomes`
+   - emits `signal.computed.v1.market_implied` with last-snapshot prices before recording each resolution
+   - emits `market.resolution.changed.v1` on successful resolution
    - consumes and persists all `*.error.v1` to `error_events`
-   - does not consume `market.resolution.changed.v1` and does not write `market_outcomes`
+   - uses dual DB pools: sweep pool (heavy queries) + consumer pool (NATS writes) to avoid contention
 3. `observe`
    - projects canonical events for operational visibility
    - serves `/dashboard`, `/status`, `/observability`
@@ -94,7 +96,10 @@ Input-specific (launcher):
 - `market_tracking` is reserved for resolution retry/backoff scheduling state.
 - `observe` can scale horizontally.
 - Use least-privilege DB roles:
-  - `polybet_input`
-  - `polybet_resolution`
-  - `polybet_observe` (read-only intent)
+  - `polybet_input` — read/write markets, gamma, sync state, launcher tables
+  - `polybet_resolution` — read/write predictions, outcomes, tracking, signals, errors, gamma_markets
+  - `polybet_observe` — read-only
+  - `polybet_experiment` — SELECT all tables + INSERT on signal_outputs (for backfill)
+- Column migrations skip ALTER TABLE on established databases (catalog check avoids AccessExclusiveLock contention)
+- Resolution sweep prioritizes low-retry-count markets and refreshes stale payloads on retry
 

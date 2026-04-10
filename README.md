@@ -1,6 +1,6 @@
-# Polybet ML System v0.1
+# Polybet ML System v0.2
 
-Polybet v0.1 is built to run **many ML experiments against Polymarket**, leveraging many different input signals, while keeping the pipeline scalable, reliable, and replayable.
+Polybet is built to run **many ML experiments against Polymarket**, leveraging many different input signals, while keeping the pipeline scalable, reliable, and replayable.
 
 ## System goal and ownership model
 
@@ -8,41 +8,43 @@ Goal: run a scalable, reliable ML prediction pipeline for Polymarket where many 
 
 Ownership flow:
 1. Discover eligible markets once (`market.new_question.v1`) in `input`.
-2. Compute standardized signals (`signal.computed.v1`) in signal workers.
+2. Compute standardized signals (`signal.computed.v1.<kind>`) in signal workers.
 3. Generate experiment predictions (`prediction.proposed.v1`) in experiment workers.
-4. Resolve market outcomes durably in `input` from gamma sync data.
+4. Resolve market outcomes durably in `resolution` from gamma API data.
 5. Fail loudly via `*.error.v1`, and persist errors to `error_events`.
-6. Keep system observable via `observe` endpoints and test suites.
+6. Keep system observable via `observe` endpoints and dashboard.
+7. Backfill historical signals and replay them to bootstrap new experiments.
 
-Critical invariant:
-- `market.resolution.changed.v1` is only emitted for markets that previously emitted `market.new_question.v1`.
-
-## Architecture (v0.1)
+## Architecture
 
 1. **2 shared Rust crates**
    - `manager/crates/polybet-db`: migrations and DB schema runtime.
    - `manager/crates/polybet-events`: NATS/event client runtime.
 2. **3 Rust singleton services**
-   - `input` (`polybet-manager-input`)
-   - `resolution` (`polybet-manager-resolution`)
-   - `observe` (`polybet-manager-observe`)
+   - `input` (`polybet-manager-input`) — market discovery, sync, experiment launcher
+   - `resolution` (`polybet-manager-resolution`) — prediction recording, market resolution, signal recording
+   - `observe` (`polybet-manager-observe`) — dashboard, metrics, observability
 3. **1 shared Python module**
    - `common/python/polybet_nats.py`
 4. **2 Python worker patterns**
-   - signal workers (`signal/`)
-   - experiment workers (`experiment/`)
+   - signal workers (`signal/`) — 12 signal kinds (6 base + 3 derived + 3 API-dependent)
+   - experiment workers (`experiment/`) — 15 experiments (controls, sentiment, kmeans)
 5. **Event system**
-   - NATS JetStream for service-to-service communication.
+   - NATS with hierarchical subjects (`signal.computed.v1.<kind>`) for targeted routing.
+   - Wildcard subscriptions (`signal.computed.v1.*`) for consumers that need all kinds.
 6. **Durable database**
    - PostgreSQL + pgvector for persistence, replayability, and embeddings.
+7. **Backfill system**
+   - `experiment/backfill.py` — generates signals from historical `gamma_markets` + `market_snapshots` data.
+   - Standalone replay (`--replay-nats`) emits to NATS for running experiments.
 
 ## Canonical events and producers/consumers
 
 | Event | Emitted by | Consumed by | Durable write owner |
 | --- | --- | --- | --- |
-| `market.new_question.v1` | `input` | signal workers, experiment workers, `observe` | `input` (`markets`, snapshots, emit tracking) |
-| `market.resolution.changed.v1` | `input` | `observe` | `input` (`market_outcomes`) |
-| `signal.computed.v1` | signal workers | experiment workers, `observe` | signal path (`signal_outputs`) |
+| `market.new_question.v1` | `input` | signal workers, `observe` | `input` (`markets`, snapshots, emit tracking) |
+| `market.resolution.changed.v1` | `resolution` | kmeans experiment, `observe` | `resolution` (`market_outcomes`) |
+| `signal.computed.v1.<kind>` | signal workers, `resolution` (last-snapshot), backfill | experiment workers, `resolution`, `observe` | `resolution` (`signal_outputs`) |
 | `prediction.proposed.v1` | experiment workers | `resolution`, `observe` | `resolution` (`experiment_predictions`) |
 | `market.error.v1` | `input` | `resolution`, `observe` | `resolution` (`error_events`) |
 | `signal.error.v1` | signal workers | `resolution`, `observe` | `resolution` (`error_events`) |
@@ -114,18 +116,38 @@ Use `.env.template` as the source of truth. Most important groups:
 5. Experiments: `EXPERIMENT_CONFIG_PATH`, `EXPERIMENT_SIGNAL_TOPIC`, `PREDICTION_OUTPUT_TOPIC`, `EXPERIMENT_SEED`.
 6. Launcher (owned by input) + ops: `LAUNCHER_*`, backup vars, per-role DB credentials.
 
+## Backfill and replay
+
+The backfill system generates signals from stored market data for historical experiments:
+
+```bash
+# DB-only backfill (runs automatically on experiment startup)
+docker run --rm --network polybet_net \
+  -e DATABASE_URL="..." -e NATS_URL="..." \
+  polybet-experiment:local python backfill.py --no-nats
+
+# Replay to NATS (run once while experiments are listening)
+docker run --rm --network polybet_net \
+  -e DATABASE_URL="..." -e NATS_URL="..." \
+  polybet-experiment:local python backfill.py --replay-nats
+```
+
+Signal kinds backfilled from `gamma_markets` payload: `market_implied`, `market_metadata`, `outcome_labels`, `question`, `clob_microstructure`, `orderbook_depth_derived`.
+
+Pre-resolution snapshot data from `market_snapshots` is used (earliest snapshot before market end time) to avoid data leakage from terminal prices.
+
 ## Durable data and replayability
 
-v0.1 keeps historical and latest-state surfaces needed for reruns:
-- markets and history: `markets`, `market_snapshots`, `gamma_markets`
-- events and history: `events`, `event_snapshots`, `gamma_events`
-- outcomes: `market_outcomes` (owned by `input` from gamma-derived updates)
-- retry scheduling state: `market_tracking` (for timed resolution retries/backoff)
-- signals: `signal_outputs`
-- predictions: `experiment_predictions`
-- errors/audit: `error_events`
+Raw data (preserved across resets):
+- `markets`, `market_snapshots`, `gamma_markets` — market data and history
+- `events`, `event_snapshots`, `gamma_events` — event data
+- `market_outcomes` — resolution results
 
-This allows experiments to be rerun against historical eligible markets, signals, and outcomes.
+Derived data (recomputable via backfill + replay):
+- `signal_outputs` — signal data
+- `experiment_predictions` — predictions
+- `error_events` — error audit log
+- `market_tracking` — resolution retry scheduling
 
 ## Images built by compose
 
@@ -140,4 +162,3 @@ This allows experiments to be rerun against historical eligible markets, signals
 - `manager/README.md`
 - `signal/README.md`
 - `experiment/README.md`
-# polybet

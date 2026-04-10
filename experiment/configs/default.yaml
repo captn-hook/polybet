@@ -1,7 +1,7 @@
 version: v1
 
 experiment:
-  id: exp-random
+  id: exp-control-random
   name: random-default
   mode: paper
   tags:

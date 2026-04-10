@@ -1,10 +1,10 @@
 version: v1
 
 experiment:
-  id: exp-follow-signal-sentiment
-  name: follow-signal-sentiment
+  id: exp-first-signal-sentiment
+  name: first-signal-sentiment
   mode: paper
-  tags: [signal, polymarket, sentiment, follow]
+  tags: [signal, polymarket, sentiment, first]
 
 model:
   family: control_baseline

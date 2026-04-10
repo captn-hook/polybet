@@ -52,6 +52,28 @@ def _parse_json_array(value: Any) -> list[Any] | None:
     return None
 
 
+def _extract_token_id(event: dict[str, Any]) -> str | None:
+    import json
+
+    payload = _extract_payload(event)
+    token_id = _pick(payload, ["tokenId", "token_id", "clobTokenId", "clob_token_id"])
+    if token_id is None:
+        for key in ("outcomeTokenIds", "clobTokenIds"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    value = None
+            if isinstance(value, list) and value:
+                token_id = value[0]
+                break
+    if token_id is None:
+        return None
+    token = str(token_id).strip()
+    return token if token else None
+
+
 def _as_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -121,6 +143,8 @@ async def run_signal_loop(
             continue
 
         details, reason = builder(event)
+        if reason == "skip":
+            continue
         status = "ok" if details is not None else "unavailable"
         payload: dict[str, Any] = {
             "event_type": "signal.computed.v1",
@@ -135,8 +159,9 @@ async def run_signal_loop(
         if details is not None:
             payload.update(details)
 
-        await client.publish_json(output_topic, payload)
-        print(f"[{service_name}] emitted signal.computed.v1 market_id={market_id} status={status} reason={reason}")
+        subject = f"{output_topic}.{signal_kind}"
+        await client.publish_json(subject, payload)
+        print(f"[{service_name}] emitted {subject} market_id={market_id} status={status} reason={reason}")
 
 
 def run_signal_entrypoint(

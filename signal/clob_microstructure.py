@@ -2,29 +2,7 @@ import os
 import urllib.parse
 from typing import Any
 
-from signal_common import _as_float, _extract_payload, _pick, _fetch_json, run_signal_entrypoint
-
-
-def _extract_token_id(event: dict[str, Any]) -> str | None:
-    payload = _extract_payload(event)
-    token_id = _pick(payload, ["tokenId", "token_id", "clobTokenId", "clob_token_id"])
-    if token_id is None:
-        for key in ("outcomeTokenIds", "clobTokenIds"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                import json
-
-                try:
-                    value = json.loads(value)
-                except json.JSONDecodeError:
-                    value = None
-            if isinstance(value, list) and value:
-                token_id = value[0]
-                break
-    if token_id is None:
-        return None
-    token = str(token_id).strip()
-    return token if token else None
+from signal_common import _as_float, _extract_token_id, _fetch_json, run_signal_entrypoint
 
 
 def _build_clob_microstructure(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
@@ -63,8 +41,6 @@ def _build_clob_microstructure(event: dict[str, Any]) -> tuple[dict[str, Any] | 
         return None, "clob_data_unavailable"
 
     return {
-        "sentiment_side": "YES",
-        "sentiment_confidence": 0.5,
         "token_id": token_id,
         "spread": spread,
         "last_trade_price": last_trade_price,

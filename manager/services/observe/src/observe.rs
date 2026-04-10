@@ -9,7 +9,7 @@ use crate::types::AppState;
 const OBSERVE_SUBJECTS: &[&str] = &[
     "market.new_question.v1",
     "market.resolution.changed.v1",
-    "signal.computed.v1",
+    "signal.computed.v1.*",
     "prediction.proposed.v1",
     "market.error.v1",
     "signal.error.v1",
