@@ -29,7 +29,7 @@ from kmeans_features import (
     build_training_matrix,
     extract_feature_vector,
 )
-from kmeans_model import KMeansPredictor
+from kmeans_model import EmbeddingPCA, KMeansPredictor
 
 
 def _iso_now() -> str:
@@ -56,6 +56,7 @@ class KMeansExperimentRunner:
         self.experiment_id = config.get("experiment", {}).get("id", "exp-kmeans-clustering")
         self.prediction_topic = os.getenv("PREDICTION_OUTPUT_TOPIC", "prediction.proposed.v1")
         self.signal_timeout_s = config.get("data", {}).get("signal_timeout_seconds", 120)
+        self.min_confidence = config.get("inference", {}).get("min_confidence", 0.5)
 
         self.model = KMeansPredictor(
             n_clusters=model_params.get("n_clusters", 2),
@@ -82,7 +83,8 @@ class KMeansExperimentRunner:
         print(
             f"[kmeans] started experiment_id={self.experiment_id} "
             f"signal_topic={signal_topic} resolution_topic={resolution_topic} "
-            f"model_fitted={self.model.is_fitted} training_count={self.model.training_count}"
+            f"model_fitted={self.model.is_fitted} training_count={self.model.training_count} "
+            f"min_confidence={self.min_confidence}"
         )
 
         await asyncio.gather(
@@ -183,7 +185,31 @@ class KMeansExperimentRunner:
         if vec is None:
             return
 
-        side, confidence = self.model.predict(vec)
+        # Look up embedding from DB if the model was trained with embedding PCA.
+        embedding: np.ndarray | None = None
+        if self.model.embedding_pca is not None and self.model.embedding_pca.is_fitted:
+            try:
+                with psycopg.connect(self.db_dsn) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT embedding::float4[] FROM market_embeddings WHERE market_id = %s",
+                            (market_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            embedding = np.array(row[0], dtype=np.float32)
+            except Exception as exc:
+                print(f"[kmeans] embedding lookup failed market_id={market_id}: {exc}")
+
+        side, confidence = self.model.predict(vec, embedding)
+
+        if confidence < self.min_confidence:
+            print(
+                f"[kmeans] skip market_id={market_id} "
+                f"confidence={confidence} < min_confidence={self.min_confidence}"
+            )
+            return
+
         market_question = None
         for event in signals.values():
             q = event.get("market_question")
@@ -234,16 +260,23 @@ class KMeansExperimentRunner:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT so.market_id, so.signal_kind, so.payload_json, mo.winning_side
+                        SELECT DISTINCT ON (so.market_id, so.signal_kind)
+                          so.market_id, so.signal_kind, so.payload_json, mo.winning_side
                         FROM signal_outputs so
                         JOIN market_outcomes mo ON mo.market_id = so.market_id
                         WHERE mo.winning_side IN ('YES', 'NO')
                           AND so.signal_kind = ANY(%s)
-                        ORDER BY so.market_id, so.signal_kind
+                          AND so.created_at < mo.resolved_at
+                        ORDER BY so.market_id, so.signal_kind, so.created_at DESC
                         """,
                         (REQUIRED_SIGNAL_KINDS,),
                     )
                     rows = cur.fetchall()
+
+                    cur.execute("SELECT market_id, embedding::float4[] FROM market_embeddings")
+                    raw_embeddings: dict[str, np.ndarray] = {
+                        r[0]: np.array(r[1], dtype=np.float32) for r in cur.fetchall()
+                    }
         except Exception as exc:
             print(f"[kmeans] DB query failed: {exc}")
             return
@@ -258,10 +291,12 @@ class KMeansExperimentRunner:
 
         # Build training set
         training_rows = []
+        market_ids: list[str] = []
         for market_id, (signals, winning_side) in markets.items():
             vec = extract_feature_vector(signals)
             if vec is not None:
                 training_rows.append((vec, winning_side))
+                market_ids.append(market_id)
 
         if not training_rows:
             print(f"[kmeans] no training data available ({len(markets)} resolved markets, 0 with signals)")
@@ -272,7 +307,25 @@ class KMeansExperimentRunner:
             return
         X, y = result
 
-        if self.model.fit(X, y):
+        # Append embedding PCA components when enough markets have embeddings.
+        from kmeans_features import EMBEDDING_PCA_DIM
+        embedding_pca: EmbeddingPCA | None = None
+        emb_vecs = [raw_embeddings.get(mid) for mid in market_ids]
+        n_with_emb = sum(e is not None for e in emb_vecs)
+        if n_with_emb >= 50:
+            emb_matrix = np.stack([e for e in emb_vecs if e is not None])
+            embedding_pca = EmbeddingPCA()
+            emb_projected = embedding_pca.fit_transform(emb_matrix)
+            emb_components = np.zeros((len(market_ids), EMBEDDING_PCA_DIM))
+            emb_idx = 0
+            for i, e in enumerate(emb_vecs):
+                if e is not None:
+                    emb_components[i] = emb_projected[emb_idx]
+                    emb_idx += 1
+            X = np.concatenate([X, emb_components], axis=1)
+            print(f"[kmeans] embedding PCA: {n_with_emb}/{len(market_ids)} markets, feature_dim={X.shape[1]}")
+
+        if self.model.fit(X, y, embedding_pca):
             print(f"[kmeans] model fitted with {len(X)} markets, {self.model.n_clusters} clusters")
         else:
             print(f"[kmeans] insufficient data for fit ({len(X)} markets, need {self.model.cold_start_min})")

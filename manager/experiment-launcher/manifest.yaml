@@ -41,3 +41,7 @@ experiments:
     config: /app/configs/kmeans_clustering.yaml
     module: strategies.kmeans_clustering
 
+  - name: exp-kmeans-clustering-confident
+    config: /app/configs/kmeans_clustering_confident.yaml
+    module: strategies.kmeans_clustering
+

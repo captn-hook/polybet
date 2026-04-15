@@ -18,13 +18,11 @@ FEATURE_SPEC: list[tuple[str, str]] = [
     ("clob_microstructure", "last_trade_price"),
     # open_interest (1)
     ("open_interest", "open_interest"),
-    # orderbook_depth_derived (7)
+    # orderbook_depth_derived (5) — raw bid/ask sizes dropped, captured by imbalance ratio
     ("orderbook_depth_derived", "imbalance"),
     ("orderbook_depth_derived", "weighted_mid"),
     ("orderbook_depth_derived", "best_bid"),
     ("orderbook_depth_derived", "best_ask"),
-    ("orderbook_depth_derived", "total_bid_size"),
-    ("orderbook_depth_derived", "total_ask_size"),
     ("orderbook_depth_derived", "slippage_at_100"),
     # price_history_derived (8)
     ("price_history_derived", "momentum"),
@@ -35,22 +33,27 @@ FEATURE_SPEC: list[tuple[str, str]] = [
     ("price_history_derived", "price_earliest"),
     ("price_history_derived", "price_mean"),
     ("price_history_derived", "price_std"),
-    # trade_flow_derived (10)
-    ("trade_flow_derived", "net_flow"),
+    # trade_flow_derived (5) — raw counts/sizes/net_flow dropped, ratios/derived kept
     ("trade_flow_derived", "buy_sell_ratio"),
     ("trade_flow_derived", "vwap_buy"),
     ("trade_flow_derived", "vwap_sell"),
     ("trade_flow_derived", "price_impact"),
     ("trade_flow_derived", "trade_velocity"),
-    ("trade_flow_derived", "buy_count"),
-    ("trade_flow_derived", "sell_count"),
-    ("trade_flow_derived", "buy_size"),
-    ("trade_flow_derived", "sell_size"),
 ]
 
 FEATURE_DIM = len(FEATURE_SPEC)
 
+# Number of PCA components extracted from the 768-dim question embedding and
+# appended to the feature vector.  Captures ~56% of embedding variance while
+# keeping the feature space manageable for KMeans.
+EMBEDDING_PCA_DIM = 10
+
 REQUIRED_SIGNAL_KINDS = sorted({kind for kind, _ in FEATURE_SPEC})
+
+# Features that are naturally log-distributed — log1p applied before scaling
+LOG1P_FEATURES: set[tuple[str, str]] = {
+    ("open_interest", "open_interest"),
+}
 
 _CATEGORICAL_ENCODERS: dict[tuple[str, str], dict[str, float]] = {
     ("market_implied", "sentiment_side"): {"YES": 1.0, "NO": 0.0},
@@ -89,7 +92,10 @@ def extract_feature_vector(signals: dict[str, dict[str, Any]]) -> np.ndarray | N
         if payload is None:
             continue
         raw = payload.get(field)
-        vec[i] = _encode_value(kind, field, raw)
+        val = _encode_value(kind, field, raw)
+        if (kind, field) in LOG1P_FEATURES and not np.isnan(val):
+            val = np.log1p(max(0.0, val))
+        vec[i] = val
     return vec
 
 

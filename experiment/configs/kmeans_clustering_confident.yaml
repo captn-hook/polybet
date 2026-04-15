@@ -1,0 +1,36 @@
+version: v1
+
+experiment:
+  id: exp-kmeans-clustering-confident
+  name: kmeans-clustering-confident
+  mode: paper
+  tags: [kmeans, clustering, ml, confident]
+
+model:
+  family: kmeans_clustering
+  task: binary_yes_no
+  params:
+    n_clusters: 2
+    cold_start_min_resolved: 3
+    random_state: 42
+
+data:
+  signal_topics: [signal.computed.v1]
+  required_signal_kinds:
+    - market_implied
+    - clob_microstructure
+    - open_interest
+    - orderbook_depth_derived
+    - price_history_derived
+    - trade_flow_derived
+  signal_timeout_seconds: 120
+  lookback_minutes: 60
+
+inference:
+  min_confidence: 0.7   # only emit when clearly in yes/no cluster territory
+  max_positions: 1
+  cooldown_seconds: 30
+
+outputs:
+  prediction_topic: prediction.proposed.v1
+  include_feature_snapshot: true

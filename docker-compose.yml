@@ -232,6 +232,18 @@ services:
     networks:
       - polybet_net
 
+  signal_question_embedding:
+    <<: *signal-base
+    environment:
+      <<: *worker-env
+      SIGNAL_KIND: question_embedding
+      SIGNAL_ID: signal-question-embedding
+      SIGNAL_OUTPUT_TOPIC: ${SIGNAL_OUTPUT_TOPIC:-signal.computed.v1}
+      MARKET_NEW_QUESTION_TOPIC: ${MARKET_NEW_QUESTION_TOPIC:-market.new_question.v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      DATABASE_URL: postgresql://${OBSERVE_DB_USER:-polybet_observe}:${OBSERVE_DB_PASSWORD:-polybet_observe_dev_password}@postgres:5432/${POSTGRES_DB:-polybet}
+    command: ["python", "question_embedding.py"]
+
   signal_market_implied:
     <<: *signal-base
     command: ["python", "market_implied.py"]
