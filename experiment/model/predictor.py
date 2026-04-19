@@ -15,9 +15,9 @@ a flat cluster yes-rate: a market deep inside the yes cluster scores near 1.0,
 one sitting on the boundary scores near 0.5.
 
 Standalone usage (fits on DB data, saves a PCA plot):
-    uv run experiment/kmeans_model.py --plot kmeans_clusters.png
-    uv run experiment/kmeans_model.py --plot clusters.png --n-clusters 3
-    DATABASE_URL=postgresql://... uv run experiment/kmeans_model.py --plot out.png
+    uv run experiment/model/predictor.py --plot kmeans_clusters.png
+    uv run experiment/model/predictor.py --plot clusters.png --n-clusters 3
+    DATABASE_URL=postgresql://... uv run experiment/model/predictor.py --plot out.png
 """
 
 import os
@@ -29,8 +29,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-sys.path.insert(0, str(Path(__file__).parent))
-from kmeans_features import EMBEDDING_PCA_DIM, FEATURE_DIM, impute_single
+from model.features import EMBEDDING_PCA_DIM, FEATURE_DIM, impute_single
 
 _DEFAULT_DSN = (
     "postgresql://polybet_observe:polybet_observe_dev_password@localhost:5432/polybet"
@@ -280,37 +279,10 @@ class KMeansPredictor:
 # ---------------------------------------------------------------------------
 
 def _load_training_data(dsn: str) -> tuple[np.ndarray, np.ndarray, list[str], "EmbeddingPCA | None"]:
-    import psycopg
-    from kmeans_features import REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
+    from model.loader import load_resolved_signals
+    from model.features import EMBEDDING_PCA_DIM, REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
 
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT ON (so.market_id, so.signal_kind)
-                  so.market_id, so.signal_kind, so.payload_json, mo.winning_side
-                FROM signal_outputs so
-                JOIN market_outcomes mo ON mo.market_id = so.market_id
-                WHERE mo.winning_side IN ('YES', 'NO')
-                  AND so.signal_kind = ANY(%s)
-                  AND so.created_at < mo.resolved_at
-                ORDER BY so.market_id, so.signal_kind, so.created_at DESC
-                """,
-                (REQUIRED_SIGNAL_KINDS,),
-            )
-            rows = cur.fetchall()
-
-            cur.execute("SELECT market_id, embedding::float4[] FROM market_embeddings")
-            raw_embeddings: dict[str, np.ndarray] = {
-                r[0]: np.array(r[1], dtype=np.float32) for r in cur.fetchall()
-            }
-
-    markets: dict[str, tuple[dict, str]] = {}
-    for market_id, signal_kind, payload_json, winning_side in rows:
-        if market_id not in markets:
-            markets[market_id] = ({}, winning_side)
-        payload = payload_json if isinstance(payload_json, dict) else {}
-        markets[market_id][0][signal_kind] = payload
+    markets, raw_embeddings = load_resolved_signals(dsn, list(REQUIRED_SIGNAL_KINDS))
 
     training_rows: list[tuple[np.ndarray, str]] = []
     market_ids: list[str] = []
@@ -328,7 +300,6 @@ def _load_training_data(dsn: str) -> tuple[np.ndarray, np.ndarray, list[str], "E
         raise RuntimeError("build_training_matrix returned None")
     X, y = result
 
-    # Append embedding PCA components when enough markets have embeddings.
     embedding_pca: EmbeddingPCA | None = None
     emb_vecs = [raw_embeddings.get(mid) for mid in market_ids]
     n_with_emb = sum(e is not None for e in emb_vecs)
@@ -339,7 +310,6 @@ def _load_training_data(dsn: str) -> tuple[np.ndarray, np.ndarray, list[str], "E
         embedding_pca = EmbeddingPCA()
         emb_projected = embedding_pca.fit_transform(emb_matrix)
 
-        # Build full component matrix; zero-impute markets without embeddings.
         emb_components = np.zeros((len(market_ids), EMBEDDING_PCA_DIM))
         emb_idx = 0
         for i, e in enumerate(emb_vecs):
@@ -357,6 +327,10 @@ def _load_training_data(dsn: str) -> tuple[np.ndarray, np.ndarray, list[str], "E
 
 if __name__ == "__main__":
     import argparse
+
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
 
     parser = argparse.ArgumentParser(description="K-Means predictor — fit on DB data and plot")
     parser.add_argument("--plot", metavar="OUTPUT_PNG", default="kmeans_clusters.png",

@@ -14,8 +14,12 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 E2E_PROJECT = "polybetint"
 
+COMMON_PYTHON = ROOT / "common" / "python"
+
 if str(EXPERIMENT_ROOT) not in sys.path:
     sys.path.insert(0, str(EXPERIMENT_ROOT))
+if str(COMMON_PYTHON) not in sys.path:
+    sys.path.insert(0, str(COMMON_PYTHON))
 
 
 @pytest.fixture(scope="session")

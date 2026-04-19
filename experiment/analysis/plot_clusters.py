@@ -11,9 +11,9 @@
 """Plot a labeled 2-D PCA projection of the fitted K-Means clusters.
 
 Usage:
-    uv run experiment/kmeans_plot.py
-    uv run experiment/kmeans_plot.py --output clusters.png
-    DATABASE_URL=postgresql://... uv run experiment/kmeans_plot.py
+    uv run experiment/analysis/plot_clusters.py
+    uv run experiment/analysis/plot_clusters.py --output clusters.png
+    DATABASE_URL=postgresql://... uv run experiment/analysis/plot_clusters.py
 """
 
 import argparse
@@ -31,9 +31,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-# Allow importing feature helpers from same directory
-sys.path.insert(0, str(Path(__file__).parent))
-from kmeans_features import REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
+from model.features import REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
+from model.loader import load_resolved_signals
 
 _DEFAULT_DSN = (
     "postgresql://polybet_observe:polybet_observe_dev_password@localhost:5432/polybet"
@@ -42,27 +45,7 @@ _DEFAULT_DSN = (
 
 def load_training_data(dsn: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Query resolved markets with signals; return X, y, market_ids."""
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT so.market_id, so.signal_kind, so.payload_json, mo.winning_side
-                FROM signal_outputs so
-                JOIN market_outcomes mo ON mo.market_id = so.market_id
-                WHERE mo.winning_side IN ('YES', 'NO')
-                  AND so.signal_kind = ANY(%s)
-                ORDER BY so.market_id, so.signal_kind
-                """,
-                (REQUIRED_SIGNAL_KINDS,),
-            )
-            rows = cur.fetchall()
-
-    markets: dict[str, tuple[dict, str]] = {}
-    for market_id, signal_kind, payload_json, winning_side in rows:
-        if market_id not in markets:
-            markets[market_id] = ({}, winning_side)
-        payload = payload_json if isinstance(payload_json, dict) else {}
-        markets[market_id][0][signal_kind] = payload
+    markets, _ = load_resolved_signals(dsn, list(REQUIRED_SIGNAL_KINDS), pre_resolution_only=False)
 
     training_rows = []
     market_ids = []
@@ -131,7 +114,6 @@ def make_plot(output_path: str, n_clusters: int = 2, random_state: int = 42) -> 
         yes_rate = cluster_yes_rate[cid]
         predicted_side = "YES" if yes_rate >= 0.5 else "NO"
         conf = yes_rate if yes_rate >= 0.5 else 1 - yes_rate
-        label = f"Cluster {cid} → {predicted_side} ({conf:.0%} yes rate)"
         for outcome in [1.0, 0.0]:
             sel = mask & (y == outcome)
             if sel.sum() == 0:

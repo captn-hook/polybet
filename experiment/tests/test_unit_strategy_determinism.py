@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from exp_strategy import decide_side
+from strategy.decide import decide_side
 
 
 def test_probabilistic_strategy_is_deterministic_for_fixed_seed() -> None:

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -108,7 +109,7 @@ fn extract_items(body: Value, preferred_keys: &[&str]) -> anyhow::Result<Vec<Val
     anyhow::bail!("no array payload found in response object")
 }
 
-fn value_as_string_opt(v: &Value, keys: &[&str]) -> Option<String> {
+pub fn value_as_string_opt(v: &Value, keys: &[&str]) -> Option<String> {
     let obj = v.as_object()?;
     for key in keys {
         if let Some(raw) = obj.get(*key) {
@@ -123,7 +124,7 @@ fn value_as_string_opt(v: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-fn value_as_f64_opt(v: &Value, keys: &[&str]) -> Option<f64> {
+pub fn value_as_f64_opt(v: &Value, keys: &[&str]) -> Option<f64> {
     let obj = v.as_object()?;
     for key in keys {
         if let Some(raw) = obj.get(*key) {
@@ -145,7 +146,7 @@ fn value_as_f64_opt(v: &Value, keys: &[&str]) -> Option<f64> {
     None
 }
 
-fn value_as_bool_opt(v: &Value, keys: &[&str]) -> Option<bool> {
+pub fn value_as_bool_opt(v: &Value, keys: &[&str]) -> Option<bool> {
     let obj = v.as_object()?;
     for key in keys {
         if let Some(raw) = obj.get(*key) {
@@ -163,6 +164,40 @@ fn value_as_bool_opt(v: &Value, keys: &[&str]) -> Option<bool> {
                 }
                 _ => {}
             }
+        }
+    }
+    None
+}
+
+pub fn extract_resolved_at(raw: &Value) -> Option<DateTime<Utc>> {
+    let parse = |s: &str| {
+        let normalized = if s.len() >= 3 {
+            let tz = &s[s.len() - 3..];
+            if (tz.starts_with('+') || tz.starts_with('-')) && tz[1..].chars().all(|c| c.is_ascii_digit()) {
+                format!("{s}00")
+            } else {
+                s.to_string()
+            }
+        } else {
+            s.to_string()
+        };
+        DateTime::parse_from_rfc3339(s)
+            .map(|v| v.with_timezone(&Utc))
+            .ok()
+            .or_else(|| {
+                DateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M:%S%z")
+                    .ok()
+                    .map(|v| v.with_timezone(&Utc))
+            })
+            .or_else(|| {
+                DateTime::parse_from_str(&format!("{s}+0000"), "%Y-%m-%d %H:%M:%S%z")
+                    .ok()
+                    .map(|v| v.with_timezone(&Utc))
+            })
+    };
+    for key in ["closedTime", "umaEndDate", "updatedAt"] {
+        if let Some(v) = raw.get(key).and_then(Value::as_str).and_then(parse) {
+            return Some(v);
         }
     }
     None

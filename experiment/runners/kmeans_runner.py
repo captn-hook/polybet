@@ -7,38 +7,21 @@ Three concurrent async tasks:
 """
 
 import asyncio
-import json
 import os
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import psycopg
 
-COMMON_PYTHON = Path(__file__).resolve().parent / "common" / "python"
-if str(COMMON_PYTHON) not in sys.path:
-    sys.path.insert(0, str(COMMON_PYTHON))
 from polybet_nats import PolyNats
-
-from kmeans_features import (
-    REQUIRED_SIGNAL_KINDS,
-    build_training_matrix,
-    extract_feature_vector,
-)
-from kmeans_model import EmbeddingPCA, KMeansPredictor
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _load_config() -> dict[str, Any]:
-    from exp_config import load_config
-    return load_config()
+from polybet_utils import iso_now
+from model.features import EMBEDDING_PCA_DIM, REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
+from model.predictor import EmbeddingPCA, KMeansPredictor
+from model.loader import load_resolved_signals
+from strategy.config import load_config
 
 
 class KMeansExperimentRunner:
@@ -176,12 +159,7 @@ class KMeansExperimentRunner:
             print(f"[kmeans] skip prediction market_id={market_id} — cold start ({self.model.training_count} resolved)")
             return
 
-        # Extract payload dicts from signal events
-        signal_payloads = {}
-        for kind, event in signals.items():
-            signal_payloads[kind] = event
-
-        vec = extract_feature_vector(signal_payloads)
+        vec = extract_feature_vector(signals)
         if vec is None:
             return
 
@@ -221,7 +199,7 @@ class KMeansExperimentRunner:
             self.prediction_topic,
             {
                 "event_type": "prediction.proposed.v1",
-                "emitted_at": _iso_now(),
+                "emitted_at": iso_now(),
                 "run_id": self.experiment_id,
                 "experiment_id": self.experiment_id,
                 "strategy": "kmeans_clustering",
@@ -245,7 +223,7 @@ class KMeansExperimentRunner:
             "prediction.error.v1",
             {
                 "event_type": "prediction.error.v1",
-                "emitted_at": _iso_now(),
+                "emitted_at": iso_now(),
                 "service": "experiment_kmeans",
                 "error_code": error_code,
                 "message": message,
@@ -256,40 +234,11 @@ class KMeansExperimentRunner:
     def _fit_from_db(self) -> None:
         """Query DB for resolved markets with signal data and fit/refit model."""
         try:
-            with psycopg.connect(self.db_dsn) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT DISTINCT ON (so.market_id, so.signal_kind)
-                          so.market_id, so.signal_kind, so.payload_json, mo.winning_side
-                        FROM signal_outputs so
-                        JOIN market_outcomes mo ON mo.market_id = so.market_id
-                        WHERE mo.winning_side IN ('YES', 'NO')
-                          AND so.signal_kind = ANY(%s)
-                          AND so.created_at < mo.resolved_at
-                        ORDER BY so.market_id, so.signal_kind, so.created_at DESC
-                        """,
-                        (REQUIRED_SIGNAL_KINDS,),
-                    )
-                    rows = cur.fetchall()
-
-                    cur.execute("SELECT market_id, embedding::float4[] FROM market_embeddings")
-                    raw_embeddings: dict[str, np.ndarray] = {
-                        r[0]: np.array(r[1], dtype=np.float32) for r in cur.fetchall()
-                    }
+            markets, raw_embeddings = load_resolved_signals(self.db_dsn, list(REQUIRED_SIGNAL_KINDS))
         except Exception as exc:
             print(f"[kmeans] DB query failed: {exc}")
             return
 
-        # Group by market_id
-        markets: dict[str, tuple[dict[str, dict], str]] = {}
-        for market_id, signal_kind, payload_json, winning_side in rows:
-            if market_id not in markets:
-                markets[market_id] = ({}, winning_side)
-            payload = payload_json if isinstance(payload_json, dict) else {}
-            markets[market_id][0][signal_kind] = payload
-
-        # Build training set
         training_rows = []
         market_ids: list[str] = []
         for market_id, (signals, winning_side) in markets.items():
@@ -307,8 +256,6 @@ class KMeansExperimentRunner:
             return
         X, y = result
 
-        # Append embedding PCA components when enough markets have embeddings.
-        from kmeans_features import EMBEDDING_PCA_DIM
         embedding_pca: EmbeddingPCA | None = None
         emb_vecs = [raw_embeddings.get(mid) for mid in market_ids]
         n_with_emb = sum(e is not None for e in emb_vecs)
@@ -332,7 +279,7 @@ class KMeansExperimentRunner:
 
 
 async def run_async() -> None:
-    cfg = _load_config()
+    cfg = load_config()
     nats_url = os.getenv("NATS_URL", "nats://nats:4222")
     db_dsn = os.getenv("DATABASE_URL")
     if not db_dsn:
@@ -350,7 +297,7 @@ async def _emit_fatal_error(nats_url: str, message: str, tb: str) -> None:
             "prediction.error.v1",
             {
                 "event_type": "prediction.error.v1",
-                "emitted_at": _iso_now(),
+                "emitted_at": iso_now(),
                 "service": "experiment_kmeans",
                 "error_code": "prediction.runtime.crash",
                 "message": message,

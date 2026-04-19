@@ -10,7 +10,7 @@ if str(EXPERIMENT_DIR) not in sys.path:
 
 import numpy as np
 
-from kmeans_features import (
+from model.features import (
     FEATURE_DIM,
     FEATURE_SPEC,
     REQUIRED_SIGNAL_KINDS,
@@ -53,7 +53,7 @@ def _make_full_signals() -> dict[str, dict[str, object]]:
 
 def test_feature_dim_matches_spec() -> None:
     assert FEATURE_DIM == len(FEATURE_SPEC)
-    assert FEATURE_DIM == 33
+    assert FEATURE_DIM == 26
 
 
 def test_required_signal_kinds() -> None:

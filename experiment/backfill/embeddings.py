@@ -9,9 +9,9 @@
 """Backfill question embeddings for all markets that don't have one yet.
 
 Usage:
-    uv run experiment/kmeans_backfill_embeddings.py
-    uv run experiment/kmeans_backfill_embeddings.py --batch-size 100 --model nomic-embed-text
-    DATABASE_URL=postgresql://... uv run experiment/kmeans_backfill_embeddings.py
+    uv run experiment/backfill/embeddings.py
+    uv run experiment/backfill/embeddings.py --batch-size 100 --model nomic-embed-text
+    DATABASE_URL=postgresql://... uv run experiment/backfill/embeddings.py
 """
 
 import argparse

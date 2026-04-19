@@ -132,7 +132,7 @@ async def _nats_listener(
     db: psycopg.AsyncConnection,
 ) -> None:
     """Subscribe to market.new_question.v1 and embed in real-time."""
-    import nats.errors
+    from nats import errors as nats_errors
 
     sub = await nats.subscribe(_SOURCE_TOPIC)
     print(f"[{_SERVICE}] nats listener ready source={_SOURCE_TOPIC}")
@@ -140,7 +140,7 @@ async def _nats_listener(
     while True:
         try:
             msg = await sub.next_msg(timeout=60)
-        except nats.errors.TimeoutError:
+        except nats_errors.TimeoutError:
             continue
         except Exception as exc:
             print(f"[{_SERVICE}] nats recv error: {exc}")

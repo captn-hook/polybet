@@ -13,8 +13,8 @@ Fits the model from resolved markets, then generates a prediction for every
 market that has a complete set of signals in signal_outputs (latest per kind).
 
 Usage:
-    uv run experiment/kmeans_backfill.py
-    DATABASE_URL=postgresql://... uv run experiment/kmeans_backfill.py
+    uv run experiment/backfill/predictions.py
+    DATABASE_URL=postgresql://... uv run experiment/backfill/predictions.py
 """
 
 import os
@@ -26,15 +26,20 @@ import numpy as np
 import psycopg
 from psycopg.rows import dict_row
 
-sys.path.insert(0, str(Path(__file__).parent))
-from kmeans_features import REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
-from kmeans_model import KMeansPredictor
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
+from model.features import REQUIRED_SIGNAL_KINDS, build_training_matrix, extract_feature_vector
+from model.loader import load_resolved_signals
+from model.predictor import KMeansPredictor
 
 EXPERIMENT_ID = "exp-kmeans-clustering"
 _DEFAULT_DSN = "postgresql://polybet:polybet_dev_password@localhost:5432/polybet"
 
 
 def fit_model(cur: psycopg.Cursor) -> KMeansPredictor:
+    # Use the all-signals variant (no temporal filter) for backfill
     cur.execute(
         """
         SELECT so.market_id, so.signal_kind, so.payload_json, mo.winning_side

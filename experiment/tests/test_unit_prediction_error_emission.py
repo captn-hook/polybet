@@ -5,7 +5,9 @@ import sys
 from types import SimpleNamespace
 
 sys.modules.setdefault("polybet_nats", SimpleNamespace(PolyNats=object))
-import exp_runner
+sys.modules.setdefault("strategy.config", SimpleNamespace(read_runtime_config=None))
+sys.modules.setdefault("strategy.decide", SimpleNamespace(decide_side=None))
+import runners.strategy_runner as exp_runner
 
 
 class _FakeNats:

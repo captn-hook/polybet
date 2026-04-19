@@ -11,8 +11,8 @@
 """PCA plot of question embeddings labelled by market outcome.
 
 Usage:
-    uv run experiment/embedding_plot.py
-    uv run experiment/embedding_plot.py --output embeddings.png --sample 5000
+    uv run experiment/analysis/plot_embeddings.py
+    uv run experiment/analysis/plot_embeddings.py --output embeddings.png --sample 5000
 """
 
 import argparse

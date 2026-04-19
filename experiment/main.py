@@ -8,7 +8,7 @@ def _run_backfill_db_only() -> None:
         return
     try:
         import asyncio
-        from backfill import MarketBackfiller
+        from backfill.signals import MarketBackfiller
         backfiller = MarketBackfiller(db_dsn=db_dsn, nats_client=None)
 
         async def _run():
@@ -26,9 +26,9 @@ def main() -> None:
 
     module = os.getenv("EXPERIMENT_MODULE", "")
     if module == "strategies.kmeans_clustering":
-        from kmeans_runner import run
+        from runners.kmeans_runner import run
     else:
-        from exp_runner import run
+        from runners.strategy_runner import run
     run()
 
 

@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-from exp_strategy import normalized_strategy_mode
+from strategy.decide import normalized_strategy_mode
 
 
 def load_config() -> dict[str, Any]:

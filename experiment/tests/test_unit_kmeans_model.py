@@ -9,8 +9,8 @@ if str(EXPERIMENT_DIR) not in sys.path:
 
 import numpy as np
 
-from kmeans_features import FEATURE_DIM
-from kmeans_model import KMeansPredictor
+from model.features import FEATURE_DIM
+from model.predictor import KMeansPredictor
 
 
 def _make_training_data(n: int = 20) -> tuple[np.ndarray, np.ndarray]:

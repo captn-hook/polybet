@@ -20,8 +20,8 @@ Metrics per fold and aggregated:
   - YES recall     (fraction of YES markets captured by the YES cluster)
 
 Usage:
-    uv run experiment/kmeans_cv.py
-    uv run experiment/kmeans_cv.py --folds 10 --n-clusters 2
+    uv run experiment/analysis/cv.py
+    uv run experiment/analysis/cv.py --folds 10 --n-clusters 2
 """
 
 import argparse
@@ -36,14 +36,18 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 
-sys.path.insert(0, str(Path(__file__).parent))
-from kmeans_features import (
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
+from model.features import (
     EMBEDDING_PCA_DIM,
     REQUIRED_SIGNAL_KINDS,
     build_training_matrix,
     extract_feature_vector,
 )
-from kmeans_model import EmbeddingPCA
+from model.predictor import EmbeddingPCA
+from model.loader import load_resolved_signals
 
 _DEFAULT_DSN = (
     "postgresql://polybet_observe:polybet_observe_dev_password@localhost:5432/polybet"
@@ -62,34 +66,7 @@ def load_all(dsn: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     y       : (n,)     1=YES, 0=NO
     """
     print("Loading signal data from DB…")
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT ON (so.market_id, so.signal_kind)
-                  so.market_id, so.signal_kind, so.payload_json, mo.winning_side
-                FROM signal_outputs so
-                JOIN market_outcomes mo ON mo.market_id = so.market_id
-                WHERE mo.winning_side IN ('YES', 'NO')
-                  AND so.signal_kind = ANY(%s)
-                  AND so.created_at < mo.resolved_at
-                ORDER BY so.market_id, so.signal_kind, so.created_at DESC
-                """,
-                (REQUIRED_SIGNAL_KINDS,),
-            )
-            signal_rows = cur.fetchall()
-
-            cur.execute("SELECT market_id, embedding::float4[] FROM market_embeddings")
-            raw_embeddings: dict[str, np.ndarray] = {
-                r[0]: np.array(r[1], dtype=np.float32) for r in cur.fetchall()
-            }
-
-    markets: dict[str, tuple[dict, str]] = {}
-    for market_id, signal_kind, payload_json, winning_side in signal_rows:
-        if market_id not in markets:
-            markets[market_id] = ({}, winning_side)
-        payload = payload_json if isinstance(payload_json, dict) else {}
-        markets[market_id][0][signal_kind] = payload
+    markets, raw_embeddings = load_resolved_signals(dsn, list(REQUIRED_SIGNAL_KINDS))
 
     training_rows = []
     market_ids = []

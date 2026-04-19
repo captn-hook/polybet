@@ -5,15 +5,10 @@ import os
 import sys
 import traceback
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from exp_config import read_runtime_config
-from exp_strategy import decide_side
-
-COMMON_PYTHON = Path(__file__).resolve().parent / "common" / "python"
-if str(COMMON_PYTHON) not in sys.path:
-    sys.path.insert(0, str(COMMON_PYTHON))
+from strategy.config import read_runtime_config
+from strategy.decide import decide_side
 from polybet_nats import PolyNats
 
 

@@ -5,6 +5,10 @@ question) and writes them to the DB + publishes to NATS so running experiments
 can process them and generate predictions against already-resolved markets.
 
 Can be run standalone or called from experiment main.py at startup.
+
+Standalone usage:
+    uv run experiment/backfill/signals.py
+    uv run experiment/backfill/signals.py --limit 500 --db-only
 """
 
 import asyncio
@@ -12,15 +16,12 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import psycopg
 
-COMMON_PYTHON = Path(__file__).resolve().parent / "common" / "python"
-if str(COMMON_PYTHON) not in sys.path:
-    sys.path.insert(0, str(COMMON_PYTHON))
+from polybet_utils import iso_now
 
 
 # ---------------------------------------------------------------------------
@@ -41,10 +42,6 @@ def _pick(d: dict, keys: list[str]) -> Any:
     return None
 
 
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 SIGNAL_TOPIC = "signal.computed.v1"
 
 
@@ -52,7 +49,7 @@ def _make_envelope(signal_id: str, signal_kind: str, market_id: str,
                    question: str | None, details: dict) -> dict:
     return {
         "event_type": SIGNAL_TOPIC,
-        "emitted_at": _iso_now(),
+        "emitted_at": iso_now(),
         "signal_id": signal_id,
         "signal_kind": signal_kind,
         "market_id": market_id,
@@ -374,4 +371,7 @@ async def _run_standalone() -> None:
 
 
 if __name__ == "__main__":
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
     asyncio.run(_run_standalone())
